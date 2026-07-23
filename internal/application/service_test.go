@@ -66,3 +66,14 @@ func TestMetaAccessTokenErrorFindsCode190ThroughWrappedAndJoinedErrors(t *testin
 	require.False(t, isMetaAccessTokenError(&meta.GraphError{Code: 200, Message: "permission denied"}))
 	require.False(t, isMetaAccessTokenError(nil))
 }
+
+func TestMetaAccessTokenErrorIgnoresPageScopedTokenError(t *testing.T) {
+	pageTokenErr := &meta.GraphError{
+		Code:         190,
+		ErrorSubcode: 2069032,
+		Message:      "invalid page-scoped access token",
+	}
+	if got := metaAccessTokenError(pageTokenErr); got != nil {
+		t.Fatalf("metaAccessTokenError() = %#v, want nil", got)
+	}
+}

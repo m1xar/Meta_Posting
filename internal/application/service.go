@@ -180,7 +180,9 @@ func metaAccessTokenError(err error) *meta.GraphError {
 	if err == nil {
 		return nil
 	}
-	if graphErr, ok := err.(*meta.GraphError); ok && graphErr.Code == 190 {
+	if graphErr, ok := err.(*meta.GraphError); ok &&
+		graphErr.Code == 190 &&
+		graphErr.ErrorSubcode != 2069032 {
 		return graphErr
 	}
 	switch wrapped := err.(type) {

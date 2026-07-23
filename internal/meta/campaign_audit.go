@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -17,13 +18,41 @@ type AdAccountCampaignAudit struct {
 
 func (c *Client) AuditPagePosts(
 	ctx context.Context,
-	accessToken string,
+	userAccessToken string,
 	pageID string,
 	limit int,
 ) ([]map[string]any, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
+	pageID = strings.TrimSpace(pageID)
+	pageAccounts, err := CollectPages[struct {
+		ID          string `json:"id"`
+		AccessToken string `json:"access_token"`
+	}](
+		ctx,
+		c,
+		"me/accounts",
+		userAccessToken,
+		url.Values{
+			"limit":  {"100"},
+			"fields": {"id,access_token"},
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	pageAccessToken := ""
+	for _, page := range pageAccounts {
+		if page.ID == pageID {
+			pageAccessToken = strings.TrimSpace(page.AccessToken)
+			break
+		}
+	}
+	if pageAccessToken == "" {
+		return nil, fmt.Errorf("meta: no page access token available for page %s", pageID)
+	}
+
 	query := url.Values{
 		"limit": {strconv.Itoa(limit)},
 		"fields": {strings.Join([]string{
@@ -35,8 +64,8 @@ func (c *Client) AuditPagePosts(
 	return CollectPages[map[string]any](
 		ctx,
 		c,
-		strings.TrimSpace(pageID)+"/posts",
-		accessToken,
+		pageID+"/posts",
+		pageAccessToken,
 		query,
 	)
 }
