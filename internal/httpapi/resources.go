@@ -173,6 +173,26 @@ func (s *Server) listAdAccounts(c fiber.Ctx) error {
 	return jsonOK(c, http.StatusOK, page)
 }
 
+func (s *Server) auditAdAccount(c fiber.Ctx) error {
+	id, err := parseID(c.Params("id"), "id")
+	if err != nil {
+		return err
+	}
+	limit, _, err := pageRequest(c)
+	if err != nil {
+		return err
+	}
+	statuses := splitQuery(c, "effective_status")
+	if len(statuses) == 0 {
+		statuses = []string{"ACTIVE"}
+	}
+	result, err := s.service.AuditAdAccount(c.Context(), id, statuses, limit)
+	if err != nil {
+		return err
+	}
+	return jsonOK(c, http.StatusOK, result)
+}
+
 func (s *Server) listAssets(c fiber.Ctx) error {
 	limit, offset, err := pageRequest(c)
 	if err != nil {

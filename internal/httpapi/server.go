@@ -119,6 +119,7 @@ func (s *Server) routes() {
 	v1.Get("/connections/:id", s.getConnection)
 	v1.Post("/connections/:id/sync", s.syncConnection)
 	v1.Get("/ad-accounts", s.listAdAccounts)
+	v1.Get("/ad-accounts/:id/campaign-audit", s.auditAdAccount)
 	v1.Get("/assets", s.listAssets)
 	v1.Post("/media", s.createMedia)
 	v1.Get("/media", s.listMedia)
