@@ -1,0 +1,100 @@
+name: raze-posting
+
+services:
+  postgres:
+    image: postgres:18.4-bookworm
+    restart: unless-stopped
+    stop_grace_period: 2m
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-raze_posting}
+      POSTGRES_USER: ${POSTGRES_USER:-raze_posting}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-raze_posting} -d ${POSTGRES_DB:-raze_posting}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - backend
+
+  uploads-init:
+    image: debian:bookworm-slim
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        install -d -m 0750 -o 10001 -g 10001 /var/lib/raze-posting/uploads
+        test "$$(stat -c '%u:%g' /var/lib/raze-posting/uploads)" = "10001:10001"
+    user: "0:0"
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    network_mode: none
+    volumes:
+      - ./uploads:/var/lib/raze-posting/uploads
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 2m
+    env_file:
+      - .env
+    environment:
+      HTTP_ADDRESS: :8080
+      UPLOADS_DIR: /var/lib/raze-posting/uploads
+    ports:
+      - "127.0.0.1:${HOST_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ./uploads:/var/lib/raze-posting/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      uploads-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - backend
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/app/worker"]
+    restart: unless-stopped
+    stop_grace_period: 35m
+    env_file:
+      - .env
+    environment:
+      UPLOADS_DIR: /var/lib/raze-posting/uploads
+    volumes:
+      - ./uploads:/var/lib/raze-posting/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      uploads-init:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+
+networks:
+  backend:
+    driver: bridge
