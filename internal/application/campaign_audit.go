@@ -3,10 +3,39 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/watchers-factory/raze-posting/internal/domain"
 	"github.com/watchers-factory/raze-posting/internal/meta"
 )
+
+func (s *Service) AuditPagePosts(
+	ctx context.Context,
+	assetID uuid.UUID,
+	limit int,
+) ([]map[string]any, error) {
+	asset, err := s.Repos.Inventory.GetAsset(ctx, assetID)
+	if err != nil {
+		return nil, err
+	}
+	if asset.AssetType != domain.AssetPage {
+		return nil, invalid("id", fmt.Sprintf("asset %s is not a page", assetID))
+	}
+	_, token, err := s.accessToken(ctx, asset.ConnectionID)
+	if err != nil {
+		return nil, err
+	}
+	posts, err := s.Meta.AuditPagePosts(ctx, token, asset.MetaAssetID, limit)
+	if err != nil {
+		expired, statusErr := s.markConnectionExpiredForMetaError(ctx, asset.ConnectionID, err)
+		if expired {
+			return nil, errors.Join(err, statusErr)
+		}
+		return nil, err
+	}
+	return posts, nil
+}
 
 func (s *Service) AuditAdAccount(
 	ctx context.Context,

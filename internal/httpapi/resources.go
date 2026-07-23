@@ -251,6 +251,25 @@ func (s *Server) listAssets(c fiber.Ctx) error {
 	return jsonOK(c, http.StatusOK, page)
 }
 
+func (s *Server) auditPagePosts(c fiber.Ctx) error {
+	id, err := parseID(c.Params("id"), "id")
+	if err != nil {
+		return err
+	}
+	limit, _, err := pageRequest(c)
+	if err != nil {
+		return err
+	}
+	posts, err := s.service.AuditPagePosts(c.Context(), id, limit)
+	if err != nil {
+		return err
+	}
+	return jsonOK(c, http.StatusOK, fiber.Map{
+		"items": posts,
+		"total": len(posts),
+	})
+}
+
 func (s *Server) createMedia(c fiber.Ctx) error {
 	contentType, _, err := mimeMediaType(c.Get("Content-Type"))
 	if err != nil || contentType != "multipart/form-data" {

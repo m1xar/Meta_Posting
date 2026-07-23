@@ -15,6 +15,32 @@ type AdAccountCampaignAudit struct {
 	Ads       []map[string]any `json:"ads"`
 }
 
+func (c *Client) AuditPagePosts(
+	ctx context.Context,
+	accessToken string,
+	pageID string,
+	limit int,
+) ([]map[string]any, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	query := url.Values{
+		"limit": {strconv.Itoa(limit)},
+		"fields": {strings.Join([]string{
+			"id", "message", "story", "created_time", "updated_time",
+			"permalink_url", "is_published", "is_hidden", "status_type",
+			"attachments{media_type,type,url,target,media,subattachments}",
+		}, ",")},
+	}
+	return CollectPages[map[string]any](
+		ctx,
+		c,
+		strings.TrimSpace(pageID)+"/posts",
+		accessToken,
+		query,
+	)
+}
+
 func (c *Client) AuditAdAccount(
 	ctx context.Context,
 	accessToken string,
