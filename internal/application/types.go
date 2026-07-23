@@ -55,6 +55,7 @@ type CreateBatchRequest struct {
 	AdAccountIDs     []uuid.UUID                `json:"ad_account_ids"`
 	IdempotencyKey   string                     `json:"idempotency_key"`
 	Hierarchy        meta.HierarchySpec         `json:"hierarchy"`
+	Tree             *meta.CampaignTreeSpec     `json:"tree,omitempty"`
 	AccountOverrides map[string]json.RawMessage `json:"account_overrides,omitempty"`
 	MediaBindings    []MediaBinding             `json:"media_bindings,omitempty"`
 	ValidateOnly     bool                       `json:"validate_only,omitempty"`
@@ -63,10 +64,11 @@ type CreateBatchRequest struct {
 }
 
 type AccountPublishPlan struct {
-	Hierarchy     meta.HierarchySpec `json:"hierarchy"`
-	MediaBindings []MediaBinding     `json:"media_bindings,omitempty"`
-	ValidateOnly  bool               `json:"validate_only,omitempty"`
-	LeavePaused   bool               `json:"leave_paused,omitempty"`
+	Hierarchy     meta.HierarchySpec     `json:"hierarchy"`
+	Tree          *meta.CampaignTreeSpec `json:"tree,omitempty"`
+	MediaBindings []MediaBinding         `json:"media_bindings,omitempty"`
+	ValidateOnly  bool                   `json:"validate_only,omitempty"`
+	LeavePaused   bool                   `json:"leave_paused,omitempty"`
 }
 
 type PublishJobPayload struct {

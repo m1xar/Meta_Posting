@@ -69,6 +69,20 @@ func TestValidateBatchAdAccountRejectsInactiveAccount(t *testing.T) {
 	require.ErrorContains(t, err, "no longer accessible")
 }
 
+func TestValidateBatchAdAccountRejectsReadOnlyMetaRole(t *testing.T) {
+	t.Parallel()
+
+	connectionID := uuid.New()
+	err := validateBatchAdAccount(&domain.AdAccount{
+		ConnectionID: connectionID,
+		IsActive:     true,
+		RawJSON:      domain.MustJSON(map[string]any{"user_tasks": []string{"ANALYZE"}}),
+	}, connectionID)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "ADVERTISE or MANAGE")
+}
+
 func TestAdAccountGraphIDFallsBackToMetaNodeID(t *testing.T) {
 	t.Parallel()
 

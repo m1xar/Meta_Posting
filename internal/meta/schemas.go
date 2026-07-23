@@ -125,6 +125,9 @@ const (
 	OptimizationGoalLandingPageViews              OptimizationGoal = "LANDING_PAGE_VIEWS"
 	OptimizationGoalLinkClicks                    OptimizationGoal = "LINK_CLICKS"
 	OptimizationGoalOffsiteConversions            OptimizationGoal = "OFFSITE_CONVERSIONS"
+	OptimizationGoalPageLikes                     OptimizationGoal = "PAGE_LIKES"
+	OptimizationGoalPostEngagement                OptimizationGoal = "POST_ENGAGEMENT"
+	OptimizationGoalProfileAndPageEngagement      OptimizationGoal = "PROFILE_AND_PAGE_ENGAGEMENT"
 	OptimizationGoalReach                         OptimizationGoal = "REACH"
 	OptimizationGoalThruPlay                      OptimizationGoal = "THRUPLAY"
 	OptimizationGoalValue                         OptimizationGoal = "VALUE"
@@ -136,6 +139,9 @@ const (
 	DestinationWebsite           DestinationType = "WEBSITE"
 	DestinationApp               DestinationType = "APP"
 	DestinationAppLinksAutomatic DestinationType = "APPLINKS_AUTOMATIC"
+	DestinationFacebookPage      DestinationType = "FACEBOOK_PAGE"
+	DestinationOnPage            DestinationType = "ON_PAGE"
+	DestinationOnPost            DestinationType = "ON_POST"
 )
 
 // RawFields is a forward-compatibility escape hatch. It is deep-merged over
@@ -174,6 +180,7 @@ type PromotedObject struct {
 	ObjectStoreURL             string    `json:"object_store_url,omitempty"`
 	OfflineConversionDataSetID string    `json:"offline_conversion_data_set_id,omitempty"`
 	PageID                     string    `json:"page_id,omitempty"`
+	SmartPSEEnabled            *bool     `json:"smart_pse_enabled,omitempty"`
 	Raw                        RawFields `json:"raw,omitempty"`
 }
 
@@ -201,6 +208,9 @@ type Targeting struct {
 	ExcludedPublisherCategories    []string         `json:"excluded_publisher_categories,omitempty"`
 	BrandSafetyContentFilterLevels []string         `json:"brand_safety_content_filter_levels,omitempty"`
 	AdvantageAudience              int              `json:"advantage_audience,omitempty"`
+	TargetingAutomation            map[string]any   `json:"targeting_automation,omitempty"`
+	ThreadsPositions               []string         `json:"threads_positions,omitempty"`
+	WhatsAppPositions              []string         `json:"whatsapp_positions,omitempty"`
 	Raw                            RawFields        `json:"raw,omitempty"`
 }
 
@@ -337,6 +347,7 @@ type AssetFeedSpec struct {
 	OptimizationType        string             `json:"optimization_type,omitempty"`
 	Groups                  []map[string]any   `json:"groups,omitempty"`
 	AdditionalData          map[string]any     `json:"additional_data,omitempty"`
+	CallAdsConfiguration    map[string]any     `json:"call_ads_configuration,omitempty"`
 	Raw                     RawFields          `json:"raw,omitempty"`
 }
 
@@ -369,6 +380,61 @@ type HierarchySpec struct {
 	AdSet    AdSetSpec    `json:"ad_set"`
 	Creative CreativeSpec `json:"creative"`
 	Ad       AdSpec       `json:"ad"`
+}
+
+// CampaignTreeSpec models the shape buyers use in Ads Manager: one campaign
+// with multiple ad sets and multiple creative/ad pairs under each ad set.
+type CampaignTreeSpec struct {
+	Campaign CampaignSpec    `json:"campaign"`
+	AdSets   []AdSetTreeSpec `json:"ad_sets"`
+}
+
+type AdSetTreeSpec struct {
+	AdSet AdSetSpec    `json:"ad_set"`
+	Ads   []AdTreeSpec `json:"ads"`
+}
+
+type AdTreeSpec struct {
+	Creative CreativeSpec `json:"creative"`
+	Ad       AdSpec       `json:"ad"`
+}
+
+func (t CampaignTreeSpec) Validate() error {
+	if len(t.AdSets) == 0 {
+		return errors.New("campaign tree requires at least one ad set")
+	}
+	if len(t.AdSets) > 100 {
+		return errors.New("campaign tree cannot contain more than 100 ad sets")
+	}
+	var validationErrors []error
+	for adSetIndex, adSet := range t.AdSets {
+		if len(adSet.Ads) == 0 {
+			validationErrors = append(validationErrors, fmt.Errorf(
+				"ad_sets[%d] requires at least one ad", adSetIndex,
+			))
+			continue
+		}
+		if len(adSet.Ads) > 100 {
+			validationErrors = append(validationErrors, fmt.Errorf(
+				"ad_sets[%d] cannot contain more than 100 ads", adSetIndex,
+			))
+			continue
+		}
+		for adIndex, ad := range adSet.Ads {
+			hierarchy := HierarchySpec{
+				Campaign: t.Campaign,
+				AdSet:    adSet.AdSet,
+				Creative: ad.Creative,
+				Ad:       ad.Ad,
+			}
+			if err := hierarchy.Validate(); err != nil {
+				validationErrors = append(validationErrors, fmt.Errorf(
+					"ad_sets[%d].ads[%d]: %w", adSetIndex, adIndex, err,
+				))
+			}
+		}
+	}
+	return errors.Join(validationErrors...)
 }
 
 func (h HierarchySpec) Validate() error {

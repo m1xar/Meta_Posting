@@ -1506,7 +1506,7 @@ components:
         - OUTCOME_TRAFFIC
     DestinationType:
       type: string
-      enum: [WEBSITE, APP, APPLINKS_AUTOMATIC]
+      enum: [WEBSITE, APP, APPLINKS_AUTOMATIC, FACEBOOK_PAGE, ON_PAGE, ON_POST]
     CreativeFormat:
       type: string
       enum:
@@ -1540,6 +1540,9 @@ components:
         - LANDING_PAGE_VIEWS
         - LINK_CLICKS
         - OFFSITE_CONVERSIONS
+        - PAGE_LIKES
+        - POST_ENGAGEMENT
+        - PROFILE_AND_PAGE_ENGAGEMENT
         - REACH
         - THRUPLAY
         - VALUE
@@ -1633,7 +1636,9 @@ components:
         - connection_id
         - name
         - ad_account_ids
-        - hierarchy
+      oneOf:
+        - required: [hierarchy]
+        - required: [tree]
       properties:
         connection_id:
           type: string
@@ -1658,12 +1663,14 @@ components:
             `Idempotency-Key` header.
         hierarchy:
           $ref: "#/components/schemas/HierarchySpec"
+        tree:
+          $ref: "#/components/schemas/CampaignTreeSpec"
         account_overrides:
           type: object
           description: |
             Keys are local ad-account UUIDs selected in `ad_account_ids`.
             Values are arbitrary JSON Merge Patch-like objects deep-merged over
-            the base hierarchy. Arrays and scalar values replace the base
+            the selected base `hierarchy` or `tree`. Arrays and scalar values replace the base
             value; nested objects merge recursively.
           propertyNames:
             format: uuid
@@ -1704,11 +1711,11 @@ components:
           format: uuid
         target:
           type: string
-          pattern: "^/creative/"
+          pattern: "^/(creative|ad_sets)/"
           description: |
-            RFC 6901 JSON pointer below `/creative`, for example
-            `/creative/object_story_spec/link_data/image_hash` or
-            `/creative/object_story_spec/video_data/video_id`.
+            RFC 6901 JSON pointer. Legacy hierarchies use `/creative/...`;
+            campaign trees use paths such as
+            `/ad_sets/0/ads/0/creative/object_story_spec/link_data/image_hash`.
     HierarchySpec:
       type: object
       additionalProperties: false
@@ -1718,6 +1725,41 @@ components:
           $ref: "#/components/schemas/CampaignSpec"
         ad_set:
           $ref: "#/components/schemas/AdSetSpec"
+        creative:
+          $ref: "#/components/schemas/CreativeSpec"
+        ad:
+          $ref: "#/components/schemas/AdSpec"
+    CampaignTreeSpec:
+      type: object
+      additionalProperties: false
+      required: [campaign, ad_sets]
+      properties:
+        campaign:
+          $ref: "#/components/schemas/CampaignSpec"
+        ad_sets:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/AdSetTreeSpec"
+    AdSetTreeSpec:
+      type: object
+      additionalProperties: false
+      required: [ad_set, ads]
+      properties:
+        ad_set:
+          $ref: "#/components/schemas/AdSetSpec"
+        ads:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/AdTreeSpec"
+    AdTreeSpec:
+      type: object
+      additionalProperties: false
+      required: [creative, ad]
+      properties:
         creative:
           $ref: "#/components/schemas/CreativeSpec"
         ad:
@@ -1828,6 +1870,8 @@ components:
           type: string
         page_id:
           type: string
+        smart_pse_enabled:
+          type: boolean
         raw:
           $ref: "#/components/schemas/RawFields"
     Targeting:
@@ -1928,6 +1972,17 @@ components:
             type: string
         advantage_audience:
           type: integer
+        targeting_automation:
+          type: object
+          additionalProperties: true
+        threads_positions:
+          type: array
+          items:
+            type: string
+        whatsapp_positions:
+          type: array
+          items:
+            type: string
         raw:
           $ref: "#/components/schemas/RawFields"
     FrequencyControlSpec:
@@ -2260,6 +2315,9 @@ components:
             type: object
             additionalProperties: true
         additional_data:
+          type: object
+          additionalProperties: true
+        call_ads_configuration:
           type: object
           additionalProperties: true
         raw:

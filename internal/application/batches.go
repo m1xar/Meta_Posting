@@ -30,6 +30,9 @@ func (s *Service) CreateBatch(ctx context.Context, request CreateBatchRequest) (
 	if len(request.AdAccountIDs) > 1000 {
 		return nil, invalid("ad_account_ids", "cannot contain more than 1000 accounts")
 	}
+	if request.Tree != nil && hierarchyProvided(request.Hierarchy) {
+		return nil, invalid("tree", "cannot be combined with hierarchy")
+	}
 	specification, err := jsonValue(request)
 	if err != nil {
 		return nil, err
@@ -63,18 +66,29 @@ func (s *Service) CreateBatch(ctx context.Context, request CreateBatchRequest) (
 		if err := validateBatchAdAccount(account, request.ConnectionID); err != nil {
 			return nil, err
 		}
-		hierarchy, err := hierarchyForAccount(request.Hierarchy, request.AccountOverrides[accountID.String()])
-		if err != nil {
-			return nil, invalid("account_overrides."+accountID.String(), err.Error())
-		}
-		if err := hierarchy.Validate(); err != nil {
-			return nil, invalid("hierarchy", fmt.Sprintf("account %s: %v", accountID, err))
-		}
 		plan := AccountPublishPlan{
-			Hierarchy:     hierarchy,
 			MediaBindings: request.MediaBindings,
 			ValidateOnly:  request.ValidateOnly,
 			LeavePaused:   request.LeavePaused,
+		}
+		if request.Tree != nil {
+			tree, treeErr := campaignTreeForAccount(*request.Tree, request.AccountOverrides[accountID.String()])
+			if treeErr != nil {
+				return nil, invalid("account_overrides."+accountID.String(), treeErr.Error())
+			}
+			if treeErr := tree.Validate(); treeErr != nil {
+				return nil, invalid("tree", fmt.Sprintf("account %s: %v", accountID, treeErr))
+			}
+			plan.Tree = &tree
+		} else {
+			hierarchy, hierarchyErr := hierarchyForAccount(request.Hierarchy, request.AccountOverrides[accountID.String()])
+			if hierarchyErr != nil {
+				return nil, invalid("account_overrides."+accountID.String(), hierarchyErr.Error())
+			}
+			if hierarchyErr := hierarchy.Validate(); hierarchyErr != nil {
+				return nil, invalid("hierarchy", fmt.Sprintf("account %s: %v", accountID, hierarchyErr))
+			}
+			plan.Hierarchy = hierarchy
 		}
 		results = append(results, domain.BatchAccountResult{
 			AdAccountID:  accountID,
@@ -96,8 +110,15 @@ func (s *Service) CreateBatch(ctx context.Context, request CreateBatchRequest) (
 		if binding.MediaID == uuid.Nil {
 			return nil, invalid(fmt.Sprintf("media_bindings[%d].media_id", index), "is required")
 		}
-		if !strings.HasPrefix(binding.Target, "/creative/") {
-			return nil, invalid(fmt.Sprintf("media_bindings[%d].target", index), "must be a JSON pointer below /creative")
+		validTarget := strings.HasPrefix(binding.Target, "/creative/")
+		if request.Tree != nil {
+			validTarget = strings.HasPrefix(binding.Target, "/ad_sets/")
+		}
+		if !validTarget {
+			return nil, invalid(
+				fmt.Sprintf("media_bindings[%d].target", index),
+				"must point below /creative for hierarchy or /ad_sets for tree",
+			)
 		}
 		if _, err := s.Repos.Media.Get(ctx, binding.MediaID); err != nil {
 			return nil, fmt.Errorf("load media binding %s: %w", binding.MediaID, err)
@@ -163,12 +184,38 @@ func (s *Service) CreateBatch(ctx context.Context, request CreateBatchRequest) (
 	return batch, nil
 }
 
+func hierarchyProvided(hierarchy meta.HierarchySpec) bool {
+	return hierarchy.Campaign.Name != "" ||
+		hierarchy.Campaign.Objective != "" ||
+		hierarchy.AdSet.Name != "" ||
+		hierarchy.Creative.Name != "" ||
+		hierarchy.Ad.Name != ""
+}
+
 func validateBatchAdAccount(account *domain.AdAccount, connectionID uuid.UUID) error {
 	if account.ConnectionID != connectionID {
 		return invalid("ad_account_ids", "contains an account from another connection")
 	}
 	if !account.IsActive {
 		return invalid("ad_account_ids", "contains an account no longer accessible through this connection")
+	}
+	var permissions struct {
+		UserTasks []string `json:"user_tasks"`
+	}
+	if account.RawJSON.Decode(&permissions) == nil && len(permissions.UserTasks) > 0 {
+		canAdvertise := false
+		for _, task := range permissions.UserTasks {
+			if task == "ADVERTISE" || task == "MANAGE" {
+				canAdvertise = true
+				break
+			}
+		}
+		if !canAdvertise {
+			return invalid(
+				"ad_account_ids",
+				"contains an account without Meta ADVERTISE or MANAGE permission",
+			)
+		}
 	}
 	return nil
 }
@@ -218,6 +265,9 @@ func (s *Service) PublishAccountResult(ctx context.Context, resultID uuid.UUID) 
 	var plan AccountPublishPlan
 	if err := accountResult.RequestJSON.Decode(&plan); err != nil {
 		return s.finishPublishFailure(ctx, batch.ConnectionID, accountResult, nil, fmt.Errorf("decode publish plan: %w", err))
+	}
+	if plan.Tree != nil {
+		return s.publishTreeAccountResult(ctx, batch, accountResult, account, plan)
 	}
 	applyPublishMarker(&plan.Hierarchy, accountResult.ID)
 	checkpoints, err := s.Repos.Batches.ListResultPublishedObjects(ctx, accountResult.ID)

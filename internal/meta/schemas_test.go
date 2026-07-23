@@ -72,3 +72,37 @@ func TestCampaignDefaultsSpecialCategoryNone(t *testing.T) {
 		t.Errorf("categories = %#v", payload["special_ad_categories"])
 	}
 }
+
+func TestCampaignTreeValidatesMultipleAdSetsAndAds(t *testing.T) {
+	t.Parallel()
+	first := validHierarchy()
+	second := validHierarchy()
+	second.AdSet.Name = "Second ad set"
+	second.Creative.Name = "Second creative"
+	second.Ad.Name = "Second ad"
+
+	tree := CampaignTreeSpec{
+		Campaign: first.Campaign,
+		AdSets: []AdSetTreeSpec{
+			{
+				AdSet: first.AdSet,
+				Ads: []AdTreeSpec{
+					{Creative: first.Creative, Ad: first.Ad},
+					{Creative: second.Creative, Ad: second.Ad},
+				},
+			},
+			{
+				AdSet: second.AdSet,
+				Ads:   []AdTreeSpec{{Creative: second.Creative, Ad: second.Ad}},
+			},
+		},
+	}
+	if err := tree.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	tree.AdSets[1].Ads = nil
+	if err := tree.Validate(); err == nil || !strings.Contains(err.Error(), "requires at least one ad") {
+		t.Fatalf("missing ads error = %v", err)
+	}
+}
