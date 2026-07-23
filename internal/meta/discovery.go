@@ -192,7 +192,7 @@ type DiscoveryResult struct {
 
 const (
 	userFields             = "id,name"
-	adAccountFields        = "id,account_id,name,account_status,disable_reason,currency,timezone_id,timezone_name,timezone_offset_hours_utc,business,owner,capabilities,user_tasks,amount_spent,balance,spend_cap,funding_source,funding_source_details,created_time,end_advertiser,end_advertiser_name,min_campaign_group_spend_cap,default_dsa_beneficiary,default_dsa_payor"
+	adAccountFields        = "id,account_id,name,account_status,disable_reason,currency,timezone_id,timezone_name,timezone_offset_hours_utc,business,owner,capabilities,user_tasks,amount_spent,balance,spend_cap,created_time,end_advertiser,end_advertiser_name,min_campaign_group_spend_cap"
 	businessFields         = "id,name,verification_status,vertical,created_time,updated_time,primary_page{id,name}"
 	pageFields             = "id,name,category,access_token,tasks,instagram_business_account{id,username,name,profile_picture_url}"
 	instagramFields        = "id,ig_user_id,username,profile_pic,has_profile_picture,is_private,is_published,owner_business{id,name}"
@@ -210,7 +210,12 @@ func (c *Client) GetMe(ctx context.Context, accessToken string) (User, error) {
 }
 
 func (c *Client) ListAdAccounts(ctx context.Context, accessToken string) ([]AdAccount, error) {
-	return CollectPages[AdAccount](ctx, c, "/me/adaccounts", accessToken, fieldsQuery(adAccountFields))
+	query := fieldsQuery(adAccountFields)
+	// Large media-buying profiles can expose hundreds or thousands of accounts.
+	// Meta rejects 250 fully-expanded account records in one response, so page
+	// this edge more conservatively while preserving the complete field set.
+	query.Set("limit", "50")
+	return CollectPages[AdAccount](ctx, c, "/me/adaccounts", accessToken, query)
 }
 
 func (c *Client) GetAdAccount(ctx context.Context, accessToken, accountID string) (AdAccount, error) {
