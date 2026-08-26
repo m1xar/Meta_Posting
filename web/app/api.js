@@ -74,6 +74,7 @@ export const api = {
   revokeConnection: (id) => request('DELETE', `/v1/connections/${id}`),
   adAccounts: (params) => request('GET', `/v1/ad-accounts${query(params)}`),
   assets: (params) => request('GET', `/v1/assets${query(params)}`),
+  pagePosts: (assetId, params) => request('GET', `/v1/assets/${assetId}/posts${query(params)}`),
 
   // analytics
   dailyInsights: (params) => request('GET', `/v1/insights/daily${query(params)}`),

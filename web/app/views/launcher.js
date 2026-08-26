@@ -168,9 +168,14 @@ export async function launcherView() {
   const billingEvent = el('select', {}, ...options(BILLING_EVENTS, ''));
 
   const pageId = el('input', { type: 'text', placeholder: '1234567890' });
-  // Existing-post creative: reuse a post that already runs ("<page>_<post>").
-  // Skips building a new creative, so no Page publishing permission is needed.
-  const objectStoryId = el('input', { type: 'text', placeholder: 'e.g. 130133585881511_1234567890 (optional)' });
+  // Creative is one of two mutually exclusive modes.
+  state.creativeMode = 'new';
+  state.objectStoryId = '';
+  const modeNew = el('input', { type: 'radio', name: 'creative-mode', value: 'new', checked: true, style: 'width:auto' });
+  const modePost = el('input', { type: 'radio', name: 'creative-mode', value: 'post', style: 'width:auto' });
+  const postPageSelect = el('select', {});
+  const postSelect = el('select', { style: 'width:100%' });
+  const postNote = el('div', { class: 'muted', style: 'font-size:.8rem;margin-top:.4rem' });
   const igActor = el('input', { type: 'text', placeholder: 'optional' });
   const link = el('input', { type: 'url', placeholder: 'https://example.com/offer' });
   const message = el('textarea', { style: 'min-height:5rem', placeholder: 'Primary text' });
@@ -201,6 +206,85 @@ export async function launcherView() {
     }
   });
   const urlTags = el('input', { type: 'text', placeholder: 'utm_source=meta&utm_campaign=...' });
+
+  const field2 = field; // alias to keep the blocks readable
+  const newCreativeBlock = el('div', {},
+    el('div', { class: 'grid-2', style: 'margin:.6rem 0' },
+      field2('Page ID', pageId, 'The Page that publishes the ad'),
+      field2('Instagram account ID', igActor, 'optional'),
+      field2('Destination URL', link,
+        'Трекинг-ссылка Keitaro с макросами. sub_id_7/sub_id_3 добавляются автоматически; главное — вести на трекинг-домен.'),
+      field2('Call to action', cta),
+      field2('Headline', headline),
+      field2('Description', description),
+      field2('Image or video', el('div', {}, mediaInput, mediaNote),
+        'Загружается один раз, публикуется в каждый выбранный кабинет'),
+      field2('Existing video ID', videoId, 'если видео уже в кабинете'),
+    ),
+    field2('Primary text', message),
+    field2('URL tags', urlTags, 'дополнительные метки, напр. sub_id_5=<байер>'),
+  );
+
+  const existingPostBlock = el('div', { style: 'display:none' },
+    el('p', { class: 'muted', style: 'font-size:.84rem;margin:.4rem 0 .8rem' },
+      'Берём готовый пост одной из твоих Страниц как есть — новый креатив не создаётся, права на публикацию не нужны. Ссылка зашита внутри поста: для правил по Keitaro пост должен изначально вести на трекинг-домен.'),
+    el('div', { class: 'grid-2' },
+      field2('Страница', postPageSelect, 'Страницы выбранного подключения'),
+      field2('Пост', postSelect, 'Выбери публикацию для рекламы')),
+    postNote,
+  );
+
+  // --- creative mode switching ---------------------------------------------
+  let loadedPagesFor = null;
+  const currentConnectionId = () =>
+    (accounts.items.find((a) => state.selected.has(a.id)) || accounts.items[0] || {}).connection_id;
+
+  const loadPages = async () => {
+    const connectionId = currentConnectionId();
+    if (!connectionId) { postNote.textContent = 'Сначала выбери кабинет в шаге 1.'; return; }
+    if (loadedPagesFor === connectionId) return;
+    postNote.textContent = 'Загружаю страницы…';
+    try {
+      const res = await api.assets({ connection_id: connectionId, types: 'page', limit: 200 });
+      const pages = res.items || [];
+      postPageSelect.replaceChildren(
+        el('option', { value: '' }, pages.length ? 'Выбери страницу' : 'Нет доступных страниц'),
+        ...pages.map((pg) => el('option', { value: pg.id }, pg.name || pg.meta_asset_id)));
+      loadedPagesFor = connectionId;
+      postNote.textContent = '';
+    } catch (error) { postNote.textContent = error.message; }
+  };
+
+  postPageSelect.addEventListener('change', async () => {
+    state.objectStoryId = '';
+    postSelect.replaceChildren(el('option', { value: '' }, 'Загружаю посты…'));
+    const assetId = postPageSelect.value;
+    if (!assetId) { postSelect.replaceChildren(el('option', { value: '' }, 'Сначала выбери страницу')); return; }
+    try {
+      const res = await api.pagePosts(assetId, { limit: 50 });
+      const posts = (res.items || []).filter((post) => post.id);
+      postSelect.replaceChildren(
+        el('option', { value: '' }, posts.length ? 'Выбери пост' : 'У страницы нет постов'),
+        ...posts.map((post) => {
+          const text = (post.message || post.story || '(без текста)').replace(/\s+/g, ' ').slice(0, 70);
+          const when = post.created_time ? ' · ' + post.created_time.slice(0, 10) : '';
+          return el('option', { value: post.id }, text + when);
+        }));
+      postNote.textContent = `${posts.length} пост(ов)`;
+    } catch (error) { postSelect.replaceChildren(el('option', { value: '' }, 'Ошибка')); postNote.textContent = error.message; }
+  });
+
+  postSelect.addEventListener('change', () => { state.objectStoryId = postSelect.value; });
+
+  const applyCreativeMode = () => {
+    const post = state.creativeMode === 'post';
+    existingPostBlock.style.display = post ? '' : 'none';
+    newCreativeBlock.style.display = post ? 'none' : '';
+    if (post) loadPages();
+  };
+  modeNew.addEventListener('change', () => { state.creativeMode = 'new'; applyCreativeMode(); });
+  modePost.addEventListener('change', () => { state.creativeMode = 'post'; applyCreativeMode(); });
+
 
   sourceSelect.addEventListener('change', async () => {
     const picked = (templates.items || []).find((t) => t.id === sourceSelect.value);
@@ -315,23 +399,13 @@ export async function launcherView() {
       field('End', endTime, 'Required with a lifetime budget'),
     ),
 
-    el('span', { class: 'label' }, 'New creative'),
-    field('Existing post ID (optional)', objectStoryId,
-      'Reuse a post that already runs instead of building a new creative. When set, all fields below are ignored and no Page write access is needed.'),
-    el('div', { class: 'grid-2', style: 'margin:.6rem 0' },
-      field('Page ID', pageId, 'The Page that publishes the ad'),
-      field('Instagram account ID', igActor),
-      field('Destination URL', link,
-        'Ссылка на трекинг-домен Keitaro с sub_id_7={{campaign.id}}. Без неё правила по Keitaro (реги/депы) не сработают и остановят кампанию. Макросы sub_id_7/sub_id_3 добавляются автоматически.'),
-      field('Call to action', cta),
-      field('Headline', headline),
-      field('Description', description),
-      field('Image or video', el('div', {}, mediaInput, mediaNote),
-        'Uploaded once here, then published into every selected ad account'),
-      field('Existing video ID', videoId, 'Only if the video is already in the account'),
-      field('URL tags', urlTags),
-    ),
-    field('Primary text', message),
+    el('span', { class: 'label' }, 'Creative'),
+    el('div', { class: 'mode-toggle' },
+      el('label', { class: 'mode-option' }, modeNew, el('span', {}, 'Новый креатив')),
+      el('label', { class: 'mode-option' }, modePost, el('span', {}, 'Существующий пост'))),
+
+    newCreativeBlock,
+    existingPostBlock,
   ));
 
   // 3 · checkpoints ----------------------------------------------------------
@@ -380,7 +454,7 @@ export async function launcherView() {
           billing_event: billingEvent.value || undefined,
         },
         creative: {
-          object_story_id: objectStoryId.value.trim(),
+          object_story_id: state.creativeMode === 'post' ? (state.objectStoryId || '') : '',
           page_id: pageId.value.trim(),
           instagram_actor_id: igActor.value.trim(),
           link: link.value.trim(),
@@ -421,6 +495,12 @@ export async function launcherView() {
       status.replaceChildren(el('div', { class: 'error' }, 'Select at least one ready ad account.'));
       return false;
     }
+    if (state.creativeMode === 'post' && !state.objectStoryId) {
+      status.replaceChildren(el('div', { class: 'error' },
+        el('strong', {}, 'Пост не выбран'),
+        el('span', {}, 'Выбери страницу и пост, либо переключись на «Новый креатив».')));
+      return false;
+    }
     if (!state.source) {
       // Without a source the ad set carries no targeting and no pixel. Meta
       // accepts that and then delivers to nobody, which looks like a broken
@@ -443,7 +523,10 @@ export async function launcherView() {
       c.min_tracker_clicks || c.min_tracker_leads || c.min_tracker_sales || c.min_tracker_revenue);
     if (!usesTracker) return Promise.resolve(true);
     const linkVal = (link.value || '') + '&' + (urlTags.value || '');
-    const looksTracked = /sub_id_7=/i.test(linkVal) || !!objectStoryId.value.trim();
+    const usingPost = state.creativeMode === 'post';
+    // An existing post carries its own link; we cannot see whether it points
+    // at the tracker, so it is always the "verify" case, never auto-green.
+    const looksTracked = !usingPost && /sub_id_7=/i.test(linkVal);
     return new Promise((resolve) => {
       const dialog = el('dialog', { style: 'max-width:32rem' },
         el('h3', { style: 'margin:0 0 .6rem' }, 'Правила зависят от Keitaro'),
@@ -468,7 +551,7 @@ export async function launcherView() {
   container.append(el('section', { class: 'card panel' },
     el('header', {}, el('span', { class: 'label' }, '4 · Review and launch')),
     el('p', { style: 'margin-bottom:.9rem;font-size:.84rem' },
-      'Preview composes the request locally and costs nothing. Dry run sends it to Meta with validate_only, so Meta checks it without creating anything.'),
+      'Preview собирает запрос локально и показывает финальную иерархию — бесплатно, ничего в Meta не создаётся. Launch публикует по-настоящему.'),
     status,
     previewBox,
     el('div', { style: 'display:flex;gap:.6rem;flex-wrap:wrap' },
@@ -491,24 +574,6 @@ export async function launcherView() {
           } catch (error) { showError(error); } finally { button.disabled = false; }
         },
       }, 'Preview'),
-      el('button', {
-        class: 'button',
-        onclick: async (event) => {
-          if (!guardSelection()) return;
-          const button = event.currentTarget;
-          button.disabled = true;
-          status.replaceChildren();
-          try {
-            // validate_only asks Meta to check the request without creating
-            // anything, so a rejection costs nothing but a round trip.
-            const payload = { ...buildPayload(), validate_only: true, leave_paused: true };
-            const result = await api.launch(payload);
-            toast('Dry run accepted by Meta', 'ok');
-            window.location.hash = `#/campaigns`;
-            void result;
-          } catch (error) { showError(error); } finally { button.disabled = false; }
-        },
-      }, 'Dry run'),
       el('button', {
         class: 'button primary',
         onclick: async (event) => {
