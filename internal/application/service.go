@@ -207,9 +207,6 @@ func emptyObject() domain.JSON {
 	return append(domain.JSON(nil), domain.EmptyJSONObject...)
 }
 
-func emptyArray() domain.JSON {
-	return append(domain.JSON(nil), domain.EmptyJSONArray...)
-}
 
 // Audit records an event from outside the application package, such as an
 // HTTP handler recording a cross-tenant read.

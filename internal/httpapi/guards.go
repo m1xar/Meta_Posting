@@ -660,3 +660,18 @@ func (s *Server) syncStatus(c fiber.Ctx) error {
 		"jobs":    pending,
 	})
 }
+
+// deleteCampaign removes a campaign on Meta and locally.
+func (s *Server) deleteCampaign(c fiber.Ctx) error {
+	id, err := parseID(c.Params("id"), "id")
+	if err != nil {
+		return err
+	}
+	if _, err := s.scopedCampaign(c, id); err != nil {
+		return err
+	}
+	if err := s.service.DeleteCampaign(c.Context(), id); err != nil {
+		return err
+	}
+	return noContent(c)
+}

@@ -60,20 +60,31 @@ export function campaignsView() {
       : null,
     el('button', {
       class: 'button small',
-      title: 'Duplicate this campaign in Meta (deep copy, paused)',
+      title: 'Дублировать кампанию в Meta (deep copy, на паузе)',
       onclick: async (event) => {
-        if (!window.confirm('Duplicate this campaign in Meta? A deep copy (ad sets, ads, creatives) is created paused.')) return;
+        if (!window.confirm('Дублировать кампанию в Meta? Создастся глубокая копия (ад-сеты, объявления, креативы) на паузе.')) return;
         const button = event.currentTarget;
         button.disabled = true;
         try {
           const result = await api.duplicateCampaign(view.campaign.id);
-          toast('Duplicated → new campaign ' + result.new_meta_id + '. It will appear after sync.', 'ok');
-        } catch (error) {
-          toast(error.message, 'bad');
-          button.disabled = false;
-        }
+          toast('Дубликат → ' + result.new_meta_id + '. Появится после синка.', 'ok');
+        } catch (error) { toast(error.message, 'bad'); button.disabled = false; }
       },
     }, 'Duplicate'),
+    el('button', {
+      class: 'button small danger',
+      title: 'Удалить кампанию в Meta и локально',
+      onclick: async (event) => {
+        if (!window.confirm('Удалить кампанию? В Meta она будет помечена DELETED и исчезнет отсюда.')) return;
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+          await api.deleteCampaign(view.campaign.id);
+          toast('Кампания удалена', 'ok');
+          load();
+        } catch (error) { toast(error.message, 'bad'); button.disabled = false; }
+      },
+    }, 'Delete'),
   );
 
   async function load() {

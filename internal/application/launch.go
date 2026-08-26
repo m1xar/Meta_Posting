@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-ads/internal/domain"
 	"github.com/watchers-factory/raze-ads/internal/meta"
 )
@@ -128,25 +127,4 @@ func (s *Service) Launch(ctx context.Context, request LaunchRequest) (LaunchResu
 		}),
 	})
 	return LaunchResult{Batch: batch, Guard: guard}, nil
-}
-
-// launchCurrency reports the currency shared by the targeted accounts, used
-// only to phrase a guard's description. Mixed currencies fall back to empty
-// so the description does not claim a precision it does not have.
-func (s *Service) launchCurrency(ctx context.Context, adAccountIDs []uuid.UUID) string {
-	currency := ""
-	for _, id := range adAccountIDs {
-		account, err := s.Repos.Inventory.GetAdAccount(ctx, id)
-		if err != nil {
-			continue
-		}
-		if currency == "" {
-			currency = account.Currency
-			continue
-		}
-		if currency != account.Currency {
-			return ""
-		}
-	}
-	return currency
 }

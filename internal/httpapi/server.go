@@ -183,6 +183,7 @@ func (s *Server) routes() {
 	v1.Post("/campaigns/:id/resume", s.resumeCampaign)
 	v1.Post("/campaigns/:id/guard", s.createCampaignGuard)
 	v1.Post("/campaigns/:id/duplicate", s.duplicateCampaign)
+	v1.Delete("/campaigns/:id", s.deleteCampaign)
 	v1.Get("/ad-accounts/:id/stats", s.accountStats)
 	v1.Get("/insights", s.listInsights)
 	v1.Get("/jobs", s.listJobs)

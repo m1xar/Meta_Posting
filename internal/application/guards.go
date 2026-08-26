@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
 	"gorm.io/gorm"
 )
 
@@ -482,4 +483,33 @@ func decodeMetricMap(raw domain.JSON) (map[string]float64, error) {
 		metrics = make(map[string]float64)
 	}
 	return metrics, nil
+}
+
+// DeleteCampaign removes a campaign on Meta (status DELETED) and drops the
+// local records that hang off it - guard checks, guards, and the published
+// object - so it disappears from the workspace. Works for launched and
+// discovered campaigns.
+func (s *Service) DeleteCampaign(ctx context.Context, campaignID uuid.UUID) error {
+	connectionID, metaID, _, err := s.resolveCampaign(ctx, campaignID)
+	if err != nil {
+		return err
+	}
+	if _, token, tokenErr := s.accessToken(ctx, connectionID); tokenErr == nil {
+		// Best-effort delete on Meta; a token/permission failure still lets us
+		// clear local state so the workspace is not stuck showing a ghost.
+		_ = s.Meta.SetEntityStatus(ctx, token, metaID, meta.StatusDeleted)
+	}
+	return s.Repos.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var published domain.PublishedObject
+		if err := tx.Where("id = ? AND object_type = ?", campaignID, domain.PublishedCampaign).
+			First(&published).Error; err == nil {
+			tx.Where("published_object_id = ?", published.ID).Delete(&domain.GuardCheck{})
+			tx.Where("published_object_id = ?", published.ID).Delete(&domain.CampaignGuard{})
+			tx.Where("id = ?", published.ID).Delete(&domain.PublishedObject{})
+			return nil
+		}
+		// Discovered campaign: mark it gone in inventory.
+		return tx.Model(&domain.AdEntity{}).Where("id = ?", campaignID).
+			Update("effective_status", "DELETED").Error
+	})
 }
