@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-ads/internal/application"
 	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
 )
 
 func (s *Server) capabilities(c fiber.Ctx) error {
@@ -303,7 +304,7 @@ func (s *Server) campaignViews(c fiber.Ctx, adAccountID *uuid.UUID) ([]campaignV
 	if err != nil {
 		return nil, totals, err
 	}
-	dailyTotals, err := s.dailyCampaignTotals(c, metaIDs)
+	dailyTotals, err := s.dailyCampaignTotals(c, scope, metaIDs)
 	if err != nil {
 		return nil, totals, err
 	}
@@ -413,7 +414,7 @@ func (s *Server) campaignViews(c fiber.Ctx, adAccountID *uuid.UUID) ([]campaignV
 
 // dailyCampaignTotals rolls the account-wide daily rows up to one lifetime
 // figure per campaign, shaped as a snapshot so rows render the same way.
-func (s *Server) dailyCampaignTotals(c fiber.Ctx, metaIDs []string) (map[string]*campaignMetrics, error) {
+func (s *Server) dailyCampaignTotals(c fiber.Ctx, scope database.Scope, metaIDs []string) (map[string]*campaignMetrics, error) {
 	if len(metaIDs) == 0 {
 		return map[string]*campaignMetrics{}, nil
 	}
@@ -423,13 +424,22 @@ func (s *Server) dailyCampaignTotals(c fiber.Ctx, metaIDs []string) (map[string]
 		Impressions  int64
 		Clicks       int64
 	}
+	// The same fb account can be connected by several tenants, so a campaign's
+	// daily rows exist once per connection. Restrict to the caller's own
+	// connections (a tenant can hold at most one connection per fb account, so
+	// this yields exactly one row per campaign-day) before summing, otherwise
+	// another tenant's identical rows would inflate the spend.
+	inner := s.service.Repos.DB().WithContext(c.Context()).
+		Table("ad_insights_daily").
+		Select("meta_object_id, date, MAX(spend) AS spend, MAX(impressions) AS impressions, MAX(clicks) AS clicks").
+		Where("level = ? AND meta_object_id IN ?", "campaign", metaIDs).
+		Group("meta_object_id, date")
+	inner = scope.Apply(inner, "ad_insights_daily")
 	var rows []rollup
 	if err := s.service.Repos.DB().WithContext(c.Context()).
-		Raw(`SELECT meta_object_id, SUM(spend) AS spend,
-		            SUM(impressions) AS impressions, SUM(clicks) AS clicks
-		     FROM ad_insights_daily
-		     WHERE level = 'campaign' AND meta_object_id IN ?
-		     GROUP BY meta_object_id`, metaIDs).
+		Table("(?) AS d", inner).
+		Select("meta_object_id, SUM(spend) AS spend, SUM(impressions) AS impressions, SUM(clicks) AS clicks").
+		Group("meta_object_id").
 		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
