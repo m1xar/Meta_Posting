@@ -101,13 +101,23 @@ func TestGroupInsightRowsAndStatusRefreshCadence(t *testing.T) {
 	require.Len(t, rows["ad-1"], 2)
 
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	// Old object: hourly cadence.
+	old := now.Add(-2 * freshPublishedWindow)
 	recent := now.Add(-59 * time.Minute)
 	boundary := now.Add(-publishedStatusRefreshInterval)
 	future := now.Add(time.Minute)
-	require.True(t, publishedStatusRefreshDue(nil, now))
-	require.False(t, publishedStatusRefreshDue(&recent, now))
-	require.True(t, publishedStatusRefreshDue(&boundary, now))
-	require.False(t, publishedStatusRefreshDue(&future, now))
+	require.True(t, publishedStatusRefreshDue(nil, old, now))
+	require.False(t, publishedStatusRefreshDue(&recent, old, now))
+	require.True(t, publishedStatusRefreshDue(&boundary, old, now))
+	require.False(t, publishedStatusRefreshDue(&future, old, now))
+	// Fresh object (published minutes ago): 2-minute cadence, so a synced-59m
+	// -ago object is due, unlike the old one on the hourly cadence.
+	freshCreated := now.Add(-30 * time.Minute)
+	require.True(t, publishedStatusRefreshDue(&recent, freshCreated, now))
+	twoMinAgo := now.Add(-freshPublishedRefreshInterval)
+	require.True(t, publishedStatusRefreshDue(&twoMinAgo, freshCreated, now))
+	oneMinAgo := now.Add(-time.Minute)
+	require.False(t, publishedStatusRefreshDue(&oneMinAgo, freshCreated, now))
 }
 
 func TestInsightSnapshotStoresZeroSnapshotWhenMetaReturnsNoRows(t *testing.T) {

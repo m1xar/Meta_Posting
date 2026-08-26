@@ -72,6 +72,12 @@ type LaunchCreativeForm struct {
 	// ID into the spec. Without this the binding has no video_data to write
 	// into and the launch fails after the campaign already exists.
 	UseVideo bool `json:"use_video,omitempty"`
+	// ObjectStoryID reuses an existing published post as the creative,
+	// "<page_id>_<post_id>". When set, the creative is that post as-is and no
+	// new object_story_spec is built - which also means no page-publishing
+	// permission is exercised, so a post that already runs can be relaunched
+	// without page write access. All other creative fields are ignored.
+	ObjectStoryID string `json:"object_story_id,omitempty"`
 }
 
 // minorUnits converts a typed amount to the integer minor units Meta expects.
@@ -190,6 +196,15 @@ func (f LaunchForm) Compose() (meta.HierarchySpec, error) {
 }
 
 func (f LaunchForm) composeCreative() (meta.CreativeSpec, error) {
+	if storyID := strings.TrimSpace(f.Creative.ObjectStoryID); storyID != "" {
+		// An existing post is the whole creative; object_story_id and
+		// object_story_spec are mutually exclusive in Meta's schema.
+		return meta.CreativeSpec{
+			Name:          firstNonEmpty(f.Creative.Name, "Creative"),
+			ObjectStoryID: storyID,
+			URLTags:       f.Creative.URLTags,
+		}, nil
+	}
 	link := meta.LinkData{
 		Link:        strings.TrimSpace(f.Creative.Link),
 		Message:     f.Creative.Message,
@@ -235,11 +250,15 @@ func (f LaunchForm) validate() error {
 	if strings.TrimSpace(f.AdSet.Name) == "" {
 		return invalid("ad_set.name", "is required")
 	}
-	if strings.TrimSpace(f.Creative.PageID) == "" {
-		return invalid("creative.page_id", "is required: an ad has to be published by a Page")
-	}
-	if f.Creative.VideoID == "" && !f.Creative.UseVideo && strings.TrimSpace(f.Creative.Link) == "" {
-		return invalid("creative.link", "is required for a link ad")
+	// An existing post carries its own page and media, so the per-field
+	// creative requirements do not apply.
+	if strings.TrimSpace(f.Creative.ObjectStoryID) == "" {
+		if strings.TrimSpace(f.Creative.PageID) == "" {
+			return invalid("creative.page_id", "is required: an ad has to be published by a Page")
+		}
+		if f.Creative.VideoID == "" && !f.Creative.UseVideo && strings.TrimSpace(f.Creative.Link) == "" {
+			return invalid("creative.link", "is required for a link ad")
+		}
 	}
 	if f.AdSet.DailyBudget > 0 && f.AdSet.LifetimeBudget > 0 {
 		return invalid("ad_set", "set either a daily or a lifetime budget, not both")

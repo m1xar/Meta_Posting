@@ -126,6 +126,7 @@ export const api = {
   pauseCampaign: (id) => request('POST', `/v1/campaigns/${id}/pause`, {}),
   resumeCampaign: (id) => request('POST', `/v1/campaigns/${id}/resume`, {}),
   setCampaignGuard: (id, payload) => request('POST', `/v1/campaigns/${id}/guard`, payload),
+  duplicateCampaign: (id) => request('POST', `/v1/campaigns/${id}/duplicate`, {}),
   accountStats: (id) => request('GET', `/v1/ad-accounts/${id}/stats`),
   guards: (params) => request('GET', `/v1/guards${query(params)}`),
   guard: (id) => request('GET', `/v1/guards/${id}`),

@@ -885,6 +885,19 @@ paths:
       responses:
         "200":
           description: Campaign activated.
+  /v1/campaigns/{id}/duplicate:
+    post:
+      tags: [Guards]
+      summary: Deep-copy a campaign in Meta (paused)
+      description: Clones the campaign with its ad sets, ads, creatives and
+        targeting via Meta's native copy edge; the copy is created paused and
+        appears as a discovered campaign after the next sync.
+      operationId: duplicateCampaign
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "202":
+          description: Copy queued in Meta.
   /v1/campaigns/{id}/guard:
     post:
       tags: [Guards]

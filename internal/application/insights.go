@@ -21,6 +21,11 @@ const (
 	// collapsing the previous one-request-per-object fan-out.
 	insightObjectChunkSize         = 50
 	publishedStatusRefreshInterval = time.Hour
+	// A freshly published object is refreshed aggressively so review, approval,
+	// rejection, and delivery transitions are caught while they happen, then
+	// falls back to the hourly cadence.
+	freshPublishedWindow          = 3 * time.Hour
+	freshPublishedRefreshInterval = 2 * time.Minute
 )
 
 func (s *Service) CollectInsights(ctx context.Context, connectionID uuid.UUID) error {
@@ -59,7 +64,7 @@ func (s *Service) CollectInsights(ctx context.Context, connectionID uuid.UUID) e
 
 	for index := range objects {
 		object := &objects[index]
-		if !publishedStatusRefreshDue(object.LastSyncedAt, now) {
+		if !publishedStatusRefreshDue(object.LastSyncedAt, object.CreatedAt, now) {
 			continue
 		}
 		if status, ok := inventoryStatuses[object.MetaObjectID]; ok {
@@ -407,11 +412,18 @@ func insightFilterField(level meta.InsightLevel) (string, error) {
 	}
 }
 
-func publishedStatusRefreshDue(lastSyncedAt *time.Time, now time.Time) bool {
+func publishedStatusRefreshDue(lastSyncedAt *time.Time, createdAt, now time.Time) bool {
 	if lastSyncedAt == nil {
 		return true
 	}
-	return !lastSyncedAt.After(now) && now.Sub(*lastSyncedAt) >= publishedStatusRefreshInterval
+	if lastSyncedAt.After(now) {
+		return false
+	}
+	interval := publishedStatusRefreshInterval
+	if now.Sub(createdAt) < freshPublishedWindow {
+		interval = freshPublishedRefreshInterval
+	}
+	return now.Sub(*lastSyncedAt) >= interval
 }
 
 func insightSnapshot(

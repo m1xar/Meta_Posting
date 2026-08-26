@@ -58,6 +58,22 @@ export function campaignsView() {
     view.campaign.source === 'launched'
       ? el('button', { class: 'button small', onclick: () => openEditor(view) }, 'Rules')
       : null,
+    el('button', {
+      class: 'button small',
+      title: 'Duplicate this campaign in Meta (deep copy, paused)',
+      onclick: async (event) => {
+        if (!window.confirm('Duplicate this campaign in Meta? A deep copy (ad sets, ads, creatives) is created paused.')) return;
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+          const result = await api.duplicateCampaign(view.campaign.id);
+          toast('Duplicated → new campaign ' + result.new_meta_id + '. It will appear after sync.', 'ok');
+        } catch (error) {
+          toast(error.message, 'bad');
+          button.disabled = false;
+        }
+      },
+    }, 'Duplicate'),
   );
 
   async function load() {

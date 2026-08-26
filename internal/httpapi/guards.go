@@ -609,3 +609,23 @@ func (s *Server) createCampaignGuard(c fiber.Ctx) error {
 	}
 	return jsonOK(c, http.StatusCreated, guard)
 }
+
+// duplicateCampaign clones one campaign in place via Meta deep copy.
+func (s *Server) duplicateCampaign(c fiber.Ctx) error {
+	id, err := parseID(c.Params("id"), "id")
+	if err != nil {
+		return err
+	}
+	if _, err := s.scopedCampaign(c, id); err != nil {
+		return err
+	}
+	var body struct{}
+	if err := decodeOptionalJSON(c, &body); err != nil {
+		return err
+	}
+	result, err := s.service.DuplicateCampaign(c.Context(), id)
+	if err != nil {
+		return err
+	}
+	return jsonOK(c, http.StatusAccepted, result)
+}

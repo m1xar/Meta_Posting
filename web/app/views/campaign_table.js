@@ -5,7 +5,7 @@
 // so the row is built in one place and the pages differ only in scope.
 
 import { api } from '../api.js';
-import { el, int, money, pill } from '../format.js';
+import { el, int, money, pill, campaignStatusPill } from '../format.js';
 import { table, toast } from '../shell.js';
 
 export const isLive = (status) => ['ACTIVE', 'IN_PROCESS', 'WITH_ISSUES'].includes(status);
@@ -68,8 +68,7 @@ export function campaignRow(view, options = {}) {
         options.accountName, campaign.meta_object_id,
         campaign.source === 'discovered' ? 'discovered' : null,
       ].filter(Boolean).join(' · '))),
-    el('td', {}, pill(campaign.effective_status || 'unknown',
-      isLive(campaign.effective_status) ? 'ok' : isPaused(campaign.effective_status) ? 'warn' : 'info')),
+    el('td', {}, campaignStatusPill(campaign.effective_status)),
     el('td', { class: 'num' }, money(spend)),
     el('td', { class: 'num' }, int(insights.impressions)),
     el('td', { class: 'num' }, int(insights.clicks)),

@@ -81,3 +81,28 @@ export const tone = (status) => {
 
 export const pill = (text, toneName) =>
   el('span', { class: `pill ${toneName || tone(text)}` }, String(text || '—').toLowerCase());
+
+/** Maps a Meta effective_status onto a readable label and a pill tone.
+ *  Meta returns far more than active/paused - review, rejection, billing and
+ *  delivery states all show up here and each gets its own badge. */
+const CAMPAIGN_STATUS = {
+  ACTIVE: ['active', 'ok'],
+  IN_PROCESS: ['processing', 'warn'],
+  PENDING_REVIEW: ['in review', 'warn'],
+  PENDING_BILLING_INFO: ['needs billing', 'warn'],
+  WITH_ISSUES: ['with issues', 'warn'],
+  PREAPPROVED: ['preapproved', 'warn'],
+  PAUSED: ['paused', 'info'],
+  CAMPAIGN_PAUSED: ['paused', 'info'],
+  ADSET_PAUSED: ['ad set paused', 'info'],
+  DISAPPROVED: ['rejected', 'bad'],
+  DISABLED: ['disabled', 'bad'],
+  DELETED: ['deleted', 'bad'],
+  ARCHIVED: ['archived', 'bad'],
+};
+
+export const campaignStatusPill = (status) => {
+  const key = String(status || '').toUpperCase();
+  const [label, toneName] = CAMPAIGN_STATUS[key] || [String(status || 'unknown').toLowerCase().replace(/_/g, ' '), 'info'];
+  return el('span', { class: `pill ${toneName}`, title: key }, label);
+};

@@ -168,6 +168,9 @@ export async function launcherView() {
   const billingEvent = el('select', {}, ...options(BILLING_EVENTS, ''));
 
   const pageId = el('input', { type: 'text', placeholder: '1234567890' });
+  // Existing-post creative: reuse a post that already runs ("<page>_<post>").
+  // Skips building a new creative, so no Page publishing permission is needed.
+  const objectStoryId = el('input', { type: 'text', placeholder: 'e.g. 130133585881511_1234567890 (optional)' });
   const igActor = el('input', { type: 'text', placeholder: 'optional' });
   const link = el('input', { type: 'url', placeholder: 'https://example.com/offer' });
   const message = el('textarea', { style: 'min-height:5rem', placeholder: 'Primary text' });
@@ -313,6 +316,8 @@ export async function launcherView() {
     ),
 
     el('span', { class: 'label' }, 'New creative'),
+    field('Existing post ID (optional)', objectStoryId,
+      'Reuse a post that already runs instead of building a new creative. When set, all fields below are ignored and no Page write access is needed.'),
     el('div', { class: 'grid-2', style: 'margin:.6rem 0' },
       field('Page ID', pageId, 'The Page that publishes the ad'),
       field('Instagram account ID', igActor),
@@ -374,6 +379,7 @@ export async function launcherView() {
           billing_event: billingEvent.value || undefined,
         },
         creative: {
+          object_story_id: objectStoryId.value.trim(),
           page_id: pageId.value.trim(),
           instagram_actor_id: igActor.value.trim(),
           link: link.value.trim(),
