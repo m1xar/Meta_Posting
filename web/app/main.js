@@ -5,18 +5,16 @@ import { renderAuth } from './auth.js';
 import { mount, registerView, state } from './shell.js';
 
 import { overviewView } from './views/overview.js';
-import { analyticsView } from './views/analytics.js';
-import { inventoryView } from './views/inventory.js';
 import { launcherView } from './views/launcher.js';
-import { historyView } from './views/history.js';
+import { campaignsView } from './views/campaigns.js';
+import { accountView } from './views/account.js';
 import { settingsView } from './views/settings.js';
 import { adminView } from './views/admin.js';
 
 registerView('overview', overviewView);
-registerView('analytics', (params) => analyticsView(params));
-registerView('inventory', (params) => inventoryView(params));
 registerView('launcher', launcherView);
-registerView('history', historyView);
+registerView('campaigns', campaignsView);
+registerView('account', (params) => accountView(params));
 registerView('settings', settingsView);
 registerView('admin', adminView);
 

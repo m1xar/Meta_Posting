@@ -5,23 +5,16 @@ import { el, clear } from './format.js';
 
 const SECTIONS = [
   {
-    group: 'Analyse',
-    items: [
-      { id: 'overview', label: 'Overview' },
-      { id: 'analytics', label: 'Analytics' },
-      { id: 'inventory', label: 'Inventory' },
-    ],
-  },
-  {
     group: 'Operate',
     items: [
+      { id: 'overview', label: 'Dashboard' },
       { id: 'launcher', label: 'Launcher' },
+      { id: 'campaigns', label: 'Campaigns' },
     ],
   },
   {
-    group: 'Trace',
+    group: 'Manage',
     items: [
-      { id: 'history', label: 'History' },
       { id: 'settings', label: 'Settings' },
     ],
   },

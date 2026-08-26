@@ -34,7 +34,7 @@ func TestWorkspaceAssetsServeWithCorrectTypes(t *testing.T) {
 	for path, contentType := range map[string]string{
 		"/static/app/main.js":            "text/javascript",
 		"/static/app/api.js":             "text/javascript",
-		"/static/app/views/analytics.js": "text/javascript",
+		"/static/app/views/campaigns.js": "text/javascript",
 		"/static/styles/base.css":        "text/css",
 		"/static/styles/app.css":         "text/css",
 		"/static/favicon.svg":            "image/svg+xml",

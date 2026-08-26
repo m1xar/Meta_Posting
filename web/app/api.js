@@ -119,13 +119,17 @@ export const api = {
     return payload;
   },
 
-  // rules
-  rules: (params) => request('GET', `/v1/rules${query(params)}`),
-  rule: (id) => request('GET', `/v1/rules/${id}`),
-  createRule: (payload) => request('POST', '/v1/rules', payload),
-  enableRule: (id) => request('POST', `/v1/rules/${id}/enable`, {}),
-  disableRule: (id) => request('POST', `/v1/rules/${id}/disable`, {}),
-  ruleEvaluations: (id, params) => request('GET', `/v1/rules/${id}/evaluations${query(params)}`),
+  // campaigns and guards
+  campaigns: (params) => request('GET', `/v1/campaigns${query(params)}`),
+  pauseCampaign: (id) => request('POST', `/v1/campaigns/${id}/pause`, {}),
+  resumeCampaign: (id) => request('POST', `/v1/campaigns/${id}/resume`, {}),
+  setCampaignGuard: (id, payload) => request('POST', `/v1/campaigns/${id}/guard`, payload),
+  accountStats: (id) => request('GET', `/v1/ad-accounts/${id}/stats`),
+  guards: (params) => request('GET', `/v1/guards${query(params)}`),
+  guard: (id) => request('GET', `/v1/guards/${id}`),
+  updateGuard: (id, payload) => request('PATCH', `/v1/guards/${id}`, payload),
+  enableGuard: (id) => request('POST', `/v1/guards/${id}/enable`, {}),
+  disableGuard: (id) => request('POST', `/v1/guards/${id}/disable`, {}),
 
   // history
   jobs: (params) => request('GET', `/v1/jobs${query(params)}`),

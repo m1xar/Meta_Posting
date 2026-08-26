@@ -10,8 +10,9 @@ import { el, int, money, pill } from '../format.js';
 import { head, empty, table, toast } from '../shell.js';
 import {
   OBJECTIVES, OPTIMIZATION_GOALS, BILLING_EVENTS, BID_STRATEGIES,
-  CALL_TO_ACTIONS, SPECIAL_CATEGORIES, GUARD_METRICS, HIGHER_IS_WORSE, metricLabel,
+  CALL_TO_ACTIONS, SPECIAL_CATEGORIES,
 } from './launcher_fields.js';
+import { checkpointEditor } from './guard_editor.js';
 
 const BLOCKER_TEXT = {
   account_not_active: 'Not active on Meta',
@@ -25,9 +26,6 @@ const BLOCKER_TEXT = {
 const state = {
   selected: new Set(),
   showBlocked: false,
-  guards: [],
-  perAccount: false,
-  mirror: false,
   source: null,
   media: null,
 };
@@ -41,75 +39,6 @@ const field = (label, control, hint) =>
 
 const options = (pairs, selected) =>
   pairs.map(([value, label]) => el('option', { value, selected: value === selected }, label));
-
-// --- guards -----------------------------------------------------------------
-
-function describeGuard(guard) {
-  if (guard.kind === 'spend_cap') return `Pause once spend reaches ${guard.spend}`;
-  const label = metricLabel(guard.metric);
-  const worse = HIGHER_IS_WORSE.has(guard.metric);
-  return worse
-    ? `After ${guard.spend} spent, pause if ${label} is above ${guard.minimum}`
-    : `After ${guard.spend} spent, pause unless ${label} reached ${guard.minimum}`;
-}
-
-function guardCard(guard, index, rerender, remove) {
-  const kind = el('select', {}, ...options([
-    ['spend_cap', 'Cap total spend'],
-    ['spend_check', 'Check a result after spend'],
-  ], guard.kind));
-  const spend = el('input', { type: 'number', min: '1', step: '1', value: guard.spend });
-
-  const metric = el('select', {},
-    ...GUARD_METRICS.map(([group, items]) =>
-      el('optgroup', { label: group }, ...options(items, guard.metric))));
-  const minimum = el('input', { type: 'number', min: '0', step: 'any', value: guard.minimum });
-  const level = el('select', {}, ...options([
-    ['campaign', 'Pause the campaign'],
-    ['adset', 'Pause the ad set'],
-    ['ad', 'Pause the ad'],
-  ], guard.level));
-  const interval = el('select', {}, ...options([
-    ['60', 'Every minute'],
-    ['300', 'Every 5 minutes'],
-    ['900', 'Every 15 minutes'],
-    ['3600', 'Hourly'],
-  ], String(guard.interval)));
-
-  const summary = el('span', { class: 'pill info' }, describeGuard(guard));
-  const check = el('div', { style: 'display:contents' });
-
-  const sync = () => {
-    guard.kind = kind.value;
-    guard.spend = Number(spend.value) || 0;
-    guard.metric = metric.value;
-    guard.minimum = Number(minimum.value) || 0;
-    guard.level = level.value;
-    guard.interval = Number(interval.value);
-    check.style.display = guard.kind === 'spend_check' ? 'contents' : 'none';
-    summary.textContent = describeGuard(guard);
-    rerender();
-  };
-  [kind, spend, metric, minimum, level, interval].forEach((n) => n.addEventListener('change', sync));
-
-  check.append(
-    field(HIGHER_IS_WORSE.has(guard.metric) ? 'Pause if above' : 'Requires at least', minimum),
-    field('Metric', metric),
-  );
-  check.style.display = guard.kind === 'spend_check' ? 'contents' : 'none';
-
-  return el('div', { class: 'card', style: 'padding:.9rem;display:grid;gap:.7rem' },
-    el('div', { style: 'display:grid;grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr));gap:.7rem;align-items:end' },
-      field(`Guard ${index + 1}`, kind),
-      field('After spend', spend),
-      check,
-      field('Action', level),
-      field('Check', interval),
-      el('button', { class: 'button small danger', onclick: remove }, 'Remove'),
-    ),
-    summary,
-  );
-}
 
 // --- view -------------------------------------------------------------------
 
@@ -379,40 +308,19 @@ export async function launcherView() {
     field('Primary text', message),
   ));
 
-  // 3 · guards ---------------------------------------------------------------
-  const guardBody = el('div', { class: 'stack' });
-  const renderGuards = () => {
-    guardBody.replaceChildren(...state.guards.map((guard, index) =>
-      guardCard(guard, index, () => {}, () => { state.guards.splice(index, 1); renderGuards(); })));
-    if (!state.guards.length) {
-      guardBody.append(el('p', { style: 'font-size:.84rem' },
-        'No stop condition. The campaign will run until something else stops it.'));
-    }
-  };
-  const scopeToggle = el('input', { type: 'checkbox', style: 'width:auto', onchange: (e) => { state.perAccount = e.currentTarget.checked; } });
-  const mirrorToggle = el('input', { type: 'checkbox', style: 'width:auto;margin-top:.2rem', onchange: (e) => { state.mirror = e.currentTarget.checked; } });
+  // 3 · checkpoints ----------------------------------------------------------
+  const ladder = checkpointEditor([
+    { spend: 5, min_tracker_clicks: 20 },
+    { spend: 15, min_tracker_leads: 1 },
+    { spend: 40, min_tracker_sales: 1 },
+  ]);
 
   container.append(el('section', { class: 'card panel' },
-    el('header', {},
-      el('span', { class: 'label' }, '3 · Stop conditions'),
-      el('button', {
-        class: 'button small',
-        onclick: () => {
-          state.guards.push({ kind: 'spend_cap', spend: 1, metric: 'impressions', minimum: 100, level: 'campaign', interval: 60 });
-          renderGuards();
-        },
-      }, 'Add guard'),
-    ),
+    el('header', {}, el('span', { class: 'label' }, '3 · Checkpoint ladder')),
     el('p', { style: 'margin-bottom:.8rem;font-size:.84rem' },
-      'Guards can only pause, never resume or raise a budget. A minute-level guard also keeps its insights collected every minute.'),
-    guardBody,
-    el('label', { style: 'display:flex;gap:.55rem;align-items:center;margin-top:1rem;font-size:.86rem' },
-      scopeToggle, el('span', {}, 'Apply each guard per ad account instead of once across the batch')),
-    el('label', { style: 'display:flex;gap:.55rem;align-items:start;margin-top:.6rem;font-size:.86rem' },
-      mirrorToggle, el('span', {}, 'Also register each guard inside Meta as a backstop. ',
-        el('span', { class: 'muted' }, 'Slower, but keeps working if this service is down. Guards Meta cannot express are left unmirrored rather than approximated.'))),
+      'Each rung is judged when lifetime spend crosses it: every minimum listed must already be met or the campaign is paused. FB clicks and impressions come from Insights; tracker clicks, registrations and deposits come from Keitaro. Guards only pause - a passed rung is never re-checked, and a manually resumed campaign is only judged again at the next rung.'),
+    ladder.node,
   ));
-  renderGuards();
 
   // 4 · launch ---------------------------------------------------------------
   const status = el('div', {});
@@ -420,20 +328,13 @@ export async function launcherView() {
 
   const buildPayload = () => {
     const selected = [...state.selected];
-    const guards = state.guards.map((guard) => ({
-      scope_level: guard.level,
-      evaluation_interval_seconds: guard.interval,
-      guard: guard.kind === 'spend_cap'
-        ? { kind: 'spend_cap', spend: guard.spend }
-        : { kind: 'spend_check', spend: guard.spend, metric: guard.metric, minimum: guard.minimum },
-    }));
     const localTime = (value) => (value ? `${value}:00+0000`.replace('T', 'T') : '');
     const payload = {
       connection_id: (accounts.items.find((a) => a.id === selected[0]) || {}).connection_id,
       name: campaignName.value.trim(),
       idempotency_key: `launch-${Date.now()}`,
       ad_account_ids: selected,
-      mirror_to_meta: state.mirror,
+      checkpoints: ladder.read(),
       form: {
         source_ad_set: state.source ? state.source.raw : undefined,
         campaign: {
@@ -480,8 +381,6 @@ export async function launcherView() {
           : '/creative/object_story_spec/link_data/image_hash',
       }];
     }
-    if (state.perAccount) payload.account_rules = Object.fromEntries(selected.map((id) => [id, guards]));
-    else payload.shared_rules = guards;
     return payload;
   };
 
@@ -525,7 +424,8 @@ export async function launcherView() {
             const result = await api.launchPreview(buildPayload());
             previewBox.replaceChildren(el('div', { class: 'card panel' },
               el('span', { class: 'label' }, `Would publish into ${result.ad_accounts} account(s)`),
-              ...(result.guards || []).map((text) => el('div', { class: 'pill info', style: 'margin:.3rem .3rem 0 0' }, text)),
+              ...(result.checkpoints || []).map((checkpoint) => el('div', { class: 'pill info', style: 'margin:.3rem .3rem 0 0' },
+                `at $${checkpoint.spend}`)),
               el('pre', { class: 'token-reveal', style: 'margin-top:.7rem;white-space:pre-wrap;max-height:22rem;overflow:auto' },
                 JSON.stringify(result.hierarchy, null, 2)),
             ));
@@ -545,7 +445,7 @@ export async function launcherView() {
             const payload = { ...buildPayload(), validate_only: true, leave_paused: true };
             const result = await api.launch(payload);
             toast('Dry run accepted by Meta', 'ok');
-            window.location.hash = `#/history`;
+            window.location.hash = `#/campaigns`;
             void result;
           } catch (error) { showError(error); } finally { button.disabled = false; }
         },
@@ -554,7 +454,8 @@ export async function launcherView() {
         class: 'button primary',
         onclick: async (event) => {
           if (!guardSelection()) return;
-          if (!window.confirm(`Publish into ${state.selected.size} ad account(s) with ${state.guards.length} guard(s)?`)) return;
+          const rungs = ladder.read().length;
+          if (!window.confirm(`Publish into ${state.selected.size} ad account(s) with ${rungs} checkpoint(s)?`)) return;
           const button = event.currentTarget;
           button.disabled = true;
           status.replaceChildren();
@@ -565,7 +466,7 @@ export async function launcherView() {
                 el('strong', {}, 'Published, but not fully guarded'), el('span', {}, result.warning)));
             }
             toast(`Launched into ${state.selected.size} account(s)`, 'ok');
-            window.location.hash = `#/history`;
+            window.location.hash = `#/campaigns`;
           } catch (error) { showError(error); } finally { button.disabled = false; }
         },
       }, 'Launch'),
