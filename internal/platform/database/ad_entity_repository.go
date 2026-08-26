@@ -16,6 +16,7 @@ type AdEntityFilter struct {
 	Scope           Scope
 	ConnectionID    *uuid.UUID
 	AdAccountID     *uuid.UUID
+	AdAccountIDs    []uuid.UUID
 	Level           *domain.AdEntityLevel
 	CampaignMetaID  string
 	AdSetMetaID     string
@@ -125,6 +126,9 @@ func (r *AdEntityRepository) List(
 	}
 	if filter.AdAccountID != nil {
 		query = query.Where("ad_account_id = ?", *filter.AdAccountID)
+	}
+	if len(filter.AdAccountIDs) > 0 {
+		query = query.Where("ad_account_id IN ?", filter.AdAccountIDs)
 	}
 	if filter.Level != nil {
 		query = query.Where("level = ?", *filter.Level)

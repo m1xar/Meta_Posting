@@ -141,6 +141,15 @@ func (s *Server) listLaunchTemplates(c fiber.Ctx) error {
 		}
 		filter.AdAccountID = &id
 	}
+	// Restrict templates to the launch-selected accounts, so a source ad set
+	// is only offered from an account the buyer is actually publishing into.
+	for _, raw := range splitQuery(c, "ad_account_ids") {
+		id, parseErr := uuid.Parse(strings.TrimSpace(raw))
+		if parseErr != nil {
+			return invalidField("ad_account_ids", "must be UUIDs")
+		}
+		filter.AdAccountIDs = append(filter.AdAccountIDs, id)
+	}
 	page, err := s.service.Repos.AdEntities.List(c.Context(), filter)
 	if err != nil {
 		return err

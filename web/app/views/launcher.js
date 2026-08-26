@@ -43,13 +43,14 @@ const options = (pairs, selected) =>
 // --- view -------------------------------------------------------------------
 
 export async function launcherView() {
-  const [accounts, firstTemplates] = await Promise.all([
-    api.launchAccounts(),
-    api.launchTemplates({ limit: 50 }),
-  ]);
-  let templates = firstTemplates;
+  const accounts = await api.launchAccounts();
+  // Source ad sets are loaded per selected account, not up front.
+  let templates = { items: [], total: 0 };
 
   const container = el('div', {});
+  // Reassigned once the source/post loaders exist; called on every change of
+  // the selected accounts so existing options track the selection.
+  let onSelectionChange = () => {};
   const ready = (accounts.items || []).filter((a) => a.readiness.ready);
   const blocked = (accounts.items || []).filter((a) => !a.readiness.ready);
   const accountName = new Map((accounts.items || []).map((a) => [a.id, a.name || a.meta_ad_account_id]));
@@ -79,6 +80,7 @@ export async function launcherView() {
           if (e.currentTarget.checked) state.selected.add(account.id);
           else state.selected.delete(account.id);
           renderSummary();
+          onSelectionChange();
         },
       })),
       el('td', { class: 'name' },
@@ -103,8 +105,8 @@ export async function launcherView() {
     el('header', {},
       el('span', { class: 'label' }, '1 · Ad accounts'),
       el('div', { style: 'display:flex;gap:.6rem;align-items:center;flex-wrap:wrap' }, summary,
-        el('button', { class: 'button small', onclick: () => { ready.forEach((a) => state.selected.add(a.id)); renderAccounts(); renderSummary(); } }, 'Select all ready'),
-        el('button', { class: 'button small', onclick: () => { state.selected.clear(); renderAccounts(); renderSummary(); } }, 'Clear'),
+        el('button', { class: 'button small', onclick: () => { ready.forEach((a) => state.selected.add(a.id)); renderAccounts(); renderSummary(); onSelectionChange(); } }, 'Select all ready'),
+        el('button', { class: 'button small', onclick: () => { state.selected.clear(); renderAccounts(); renderSummary(); onSelectionChange(); } }, 'Clear'),
         blocked.length ? el('button', {
           class: 'button small',
           onclick: (e) => {
@@ -127,29 +129,45 @@ export async function launcherView() {
   const sourceSelect = el('select', { size: '6', style: 'min-height:9rem' });
   const sourceNote = el('div', { style: 'font-size:.82rem;margin-top:.6rem;display:flex;gap:.3rem;align-items:center;flex-wrap:wrap' });
 
-  // The list is a light server-side page: identity fields only. The full
-  // targeting tree and creative are fetched when one ad set is picked.
+  // Source ad sets are offered only from the accounts selected for this
+  // launch: copying an ad set into an account it does not belong to drags in a
+  // pixel that account cannot use, which Meta rejects.
   const renderSources = () => {
-    sourceSelect.replaceChildren(...(templates.items || []).map((t) => el('option', {
+    const items = templates.items || [];
+    sourceSelect.replaceChildren(...items.map((t) => el('option', {
       value: t.id,
       selected: state.source && state.source.id === t.id,
     }, `${t.name || 'unnamed'} · ${accountName.get(t.ad_account_id) || '?'} · ${t.effective_status || ''} · ${t.meta_object_id.slice(-6)}`)));
-    if (!state.source) sourceNote.textContent = `${(templates.items || []).length} of ${templates.total} ad sets — pick one to copy from`;
+    if (!state.source) {
+      sourceNote.textContent = items.length
+        ? `${items.length} of ${templates.total} ад-сетов в выбранных кабинетах — выбери для копирования`
+        : 'В выбранных кабинетах нет ад-сетов для копирования.';
+    }
+  };
+  const loadSources = async () => {
+    if (!state.selected.size) {
+      templates = { items: [], total: 0 };
+      state.source = null;
+      sourceSelect.replaceChildren(el('option', { value: '' }, 'Сначала выбери аккаунт в шаге 1'));
+      sourceNote.textContent = 'Выбери один или несколько кабинетов выше, чтобы увидеть их ад-сеты.';
+      return;
+    }
+    const term = sourceSearch.value.trim();
+    sourceNote.textContent = 'Загружаю…';
+    try {
+      templates = await api.launchTemplates({
+        limit: 50,
+        ad_account_ids: [...state.selected].join(','),
+        ...(term ? { search: term } : {}),
+      });
+      state.source = null;
+      renderSources();
+    } catch (error) { sourceNote.textContent = error.message; }
   };
   let sourceTimer = null;
   sourceSearch.addEventListener('input', () => {
     clearTimeout(sourceTimer);
-    sourceTimer = setTimeout(async () => {
-      const term = sourceSearch.value.trim();
-      sourceNote.textContent = 'Searching…';
-      try {
-        templates = await api.launchTemplates({ limit: 50, ...(term ? { search: term } : {}) });
-        state.source = null;
-        renderSources();
-      } catch (error) {
-        sourceNote.textContent = error.message;
-      }
-    }, 300);
+    sourceTimer = setTimeout(loadSources, 300);
   });
 
   const campaignName = el('input', { type: 'text', placeholder: 'Spring prospecting' });
@@ -257,23 +275,48 @@ export async function launcherView() {
   );
 
   // --- creative mode switching ---------------------------------------------
-  let loadedPagesFor = null;
-  const currentConnectionId = () =>
-    (accounts.items.find((a) => state.selected.has(a.id)) || accounts.items[0] || {}).connection_id;
+  let loadedPagesKey = null;
+  // Connections behind the selected accounts. Pages live at the connection
+  // level, so a page is offered only if it exists in every selected account's
+  // connection - i.e. usable across the whole batch.
+  const selectedConnectionIds = () => {
+    const ids = new Set();
+    accounts.items.forEach((a) => { if (state.selected.has(a.id)) ids.add(a.connection_id); });
+    return [...ids];
+  };
 
   const loadPages = async () => {
-    const connectionId = currentConnectionId();
-    if (!connectionId) { postNote.textContent = 'Сначала выбери кабинет в шаге 1.'; return; }
-    if (loadedPagesFor === connectionId) return;
+    const connectionIds = selectedConnectionIds();
+    if (!connectionIds.length) {
+      postPageSelect.replaceChildren(el('option', { value: '' }, 'Сначала выбери аккаунт в шаге 1'));
+      postNote.textContent = 'Выбери кабинеты выше, чтобы увидеть их страницы.';
+      return;
+    }
+    const key = connectionIds.slice().sort().join(',');
+    if (loadedPagesKey === key) return;
     postNote.textContent = 'Загружаю страницы…';
     try {
-      const res = await api.assets({ connection_id: connectionId, types: 'page', limit: 200 });
-      const pages = res.items || [];
+      const lists = await Promise.all(connectionIds.map((cid) =>
+        api.assets({ connection_id: cid, types: 'page', limit: 200 }).then((r) => r.items || [])));
+      // Intersect by meta_asset_id so only pages available to all selected
+      // connections remain; carry the first connection's asset id to load posts.
+      const counts = new Map();
+      const byMeta = new Map();
+      lists.forEach((pages) => {
+        const seen = new Set();
+        pages.forEach((pg) => {
+          if (seen.has(pg.meta_asset_id)) return;
+          seen.add(pg.meta_asset_id);
+          counts.set(pg.meta_asset_id, (counts.get(pg.meta_asset_id) || 0) + 1);
+          if (!byMeta.has(pg.meta_asset_id)) byMeta.set(pg.meta_asset_id, pg);
+        });
+      });
+      const shared = [...byMeta.values()].filter((pg) => counts.get(pg.meta_asset_id) === connectionIds.length);
       postPageSelect.replaceChildren(
-        el('option', { value: '' }, pages.length ? 'Выбери страницу' : 'Нет доступных страниц'),
-        ...pages.map((pg) => el('option', { value: pg.id }, pg.name || pg.meta_asset_id)));
-      loadedPagesFor = connectionId;
-      postNote.textContent = '';
+        el('option', { value: '' }, shared.length ? 'Выбери страницу' : 'Нет страниц, доступных всем выбранным кабинетам'),
+        ...shared.map((pg) => el('option', { value: pg.id }, pg.name || pg.meta_asset_id)));
+      loadedPagesKey = key;
+      postNote.textContent = shared.length ? `${shared.length} страниц(ы)` : '';
     } catch (error) { postNote.textContent = error.message; }
   };
 
@@ -349,6 +392,13 @@ export async function launcherView() {
   };
   adSetModeNew.addEventListener('change', () => { state.adSetMode = 'new'; applyAdSetMode(); });
   adSetModeExisting.addEventListener('change', () => { state.adSetMode = 'existing'; applyAdSetMode(); });
+
+  // Selecting/deselecting accounts reloads the existing options they gate.
+  onSelectionChange = () => {
+    loadSources();
+    loadedPagesKey = null;
+    if (state.creativeMode === 'post') loadPages();
+  };
 
 
   sourceSelect.addEventListener('change', async () => {
@@ -649,17 +699,29 @@ export async function launcherView() {
           const rungs = ladder.read().length;
           if (!window.confirm(`Publish into ${state.selected.size} ad account(s) with ${rungs} checkpoint(s)?`)) return;
           const button = event.currentTarget;
+          const label = button.textContent;
           button.disabled = true;
-          status.replaceChildren();
+          button.textContent = 'Публикуем…';
+          status.replaceChildren(el('div', { class: 'card panel', style: 'display:flex;gap:.6rem;align-items:center' },
+            el('span', { class: 'spinner' }), el('span', {}, 'Отправляем в Meta и ждём ответ…')));
           try {
+            // Stay on the launcher; report the real outcome here rather than
+            // redirecting before Meta has answered.
             const result = await api.launch(buildPayload());
+            status.replaceChildren();
             if (result.warning) {
               status.replaceChildren(el('div', { class: 'error' },
-                el('strong', {}, 'Published, but not fully guarded'), el('span', {}, result.warning)));
+                el('strong', {}, 'Опубликовано, но гвард не полностью прикреплён'), el('span', {}, result.warning)));
+              toast('Опубликовано с оговоркой — проверь гвард', 'ok');
+            } else {
+              status.replaceChildren(el('div', { class: 'card panel', style: 'border-color:var(--ok)' },
+                el('strong', {}, `Готово — запущено в ${state.selected.size} кабинет(ов).`),
+                el('a', { class: 'button small', href: '#/campaigns', style: 'margin-left:.6rem' }, 'Открыть кампании')));
+              toast(`Запущено в ${state.selected.size} кабинет(ов)`, 'ok');
             }
-            toast(`Launched into ${state.selected.size} account(s)`, 'ok');
-            window.location.hash = `#/campaigns`;
-          } catch (error) { showError(error); } finally { button.disabled = false; }
+          } catch (error) {
+            showError(error);
+          } finally { button.disabled = false; button.textContent = label; }
         },
       }, 'Launch'),
     ),
@@ -667,6 +729,6 @@ export async function launcherView() {
 
   applyCreativeMode();
   applyAdSetMode();
-  renderSources();
+  loadSources();
   return container;
 }
