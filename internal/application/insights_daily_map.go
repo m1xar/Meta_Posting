@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-ads/internal/domain"
 	"github.com/watchers-factory/raze-ads/internal/meta"
-	"github.com/watchers-factory/raze-ads/internal/rules"
+	insightmetrics "github.com/watchers-factory/raze-ads/internal/metrics"
 )
 
 // dailyRowContext carries the account-level facts that a single insight row
@@ -140,7 +140,7 @@ func dailyInsightFromRow(
 
 	// The flat metric map is the shape internal/rules evaluates against, so
 	// automation rules read these rows without a translation layer.
-	flattened, err := rules.FlattenInsightsJSON(encodedRaw)
+	flattened, err := insightmetrics.FlattenInsightsJSON(encodedRaw)
 	if err != nil {
 		return domain.AdInsightDaily{}, false, err
 	}

@@ -85,7 +85,7 @@ func (s RepositoryScheduleStore) activeRecurringJob(
 }
 
 func isRecurringJob(jobType string) bool {
-	return jobType == application.JobCollectInsights || jobType == application.JobEvaluateRules
+	return jobType == application.JobCollectInsights || jobType == application.JobEvaluateGuards
 }
 
 type SchedulerOptions struct {
@@ -100,6 +100,10 @@ type SchedulerOptions struct {
 	// together with the insight collection they depend on.
 	FastLaneInterval    time.Duration
 	FastRuleMaxInterval int64
+
+	// TrackerInterval drives the global Keitaro report sync. Zero disables
+	// it, for deployments without a tracker.
+	TrackerInterval time.Duration
 
 	// DiscoveryInterval re-runs ad account discovery. Without it a connection
 	// is only ever discovered once, at OAuth time, so an ad account granted
@@ -186,7 +190,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				s.options.Logger.Error("schedule insights jobs", "error", err)
 			}
 		case <-rulesTicker.C:
-			if err := s.ScheduleRuleEvaluations(ctx, s.options.Now()); err != nil {
+			if err := s.ScheduleGuardEvaluations(ctx, s.options.Now()); err != nil {
 				s.options.Logger.Error("schedule rule jobs", "error", err)
 			}
 		case <-maintenanceTicker.C:
@@ -253,6 +257,9 @@ func (s *Scheduler) startAccountTickers(ctx context.Context) func() {
 		return s.ScheduleFastLane(ctx, now,
 			s.options.FastLaneInterval, s.options.FastRuleMaxInterval)
 	})
+	run(s.options.TrackerInterval, "tracker sync", func(now time.Time) error {
+		return s.ScheduleTrackerSync(ctx, now)
+	})
 
 	return func() {
 		for _, ticker := range tickers {
@@ -269,7 +276,7 @@ func (s *Scheduler) runInitialPass(ctx context.Context) {
 	if err := s.ScheduleInsights(ctx, now); err != nil && ctx.Err() == nil {
 		s.options.Logger.Error("initial insights scheduling", "error", err)
 	}
-	if err := s.ScheduleRuleEvaluations(ctx, now); err != nil && ctx.Err() == nil {
+	if err := s.ScheduleGuardEvaluations(ctx, now); err != nil && ctx.Err() == nil {
 		s.options.Logger.Error("initial rule scheduling", "error", err)
 	}
 	s.runInitialAccountPass(ctx, now)
@@ -328,18 +335,36 @@ func (s *Scheduler) ScheduleInsights(ctx context.Context, now time.Time) error {
 	)
 }
 
-func (s *Scheduler) ScheduleRuleEvaluations(ctx context.Context, now time.Time) error {
+func (s *Scheduler) ScheduleGuardEvaluations(ctx context.Context, now time.Time) error {
 	return s.scheduleForActiveConnections(
 		ctx,
 		now,
-		application.JobEvaluateRules,
+		application.JobEvaluateGuards,
 		s.options.RuleInterval,
 		10,
 		func(connectionID uuid.UUID) domain.JSON {
 			id := connectionID
-			return domain.MustJSON(application.EvaluateRulesJobPayload{ConnectionID: &id})
+			return domain.MustJSON(application.EvaluateGuardsJobPayload{ConnectionID: &id})
 		},
 	)
+}
+
+// ScheduleTrackerSync enqueues one global Keitaro sync per interval bucket.
+func (s *Scheduler) ScheduleTrackerSync(ctx context.Context, now time.Time) error {
+	if s.options.TrackerInterval <= 0 {
+		return nil
+	}
+	dedupeKey := "tracker:" + scheduleBucket(now, s.options.TrackerInterval)
+	_, _, err := s.store.Enqueue(ctx, &domain.Job{
+		Type:        application.JobSyncTracker,
+		Status:      domain.JobPending,
+		Priority:    5,
+		Payload:     domain.MustJSON(application.SyncTrackerJobPayload{}),
+		DedupeKey:   &dedupeKey,
+		MaxAttempts: s.options.MaxAttempts,
+		AvailableAt: now.UTC(),
+	})
+	return err
 }
 
 func (s *Scheduler) ExpireOAuthSessions(ctx context.Context, now time.Time) (int64, error) {

@@ -221,13 +221,13 @@ func (s *Server) launch(c fiber.Ctx) error {
 		// caller can act rather than guess.
 		if result.Batch != nil {
 			return jsonOK(c, http.StatusAccepted, fiber.Map{
-				"batch": result.Batch, "rules": result.Rules, "warning": err.Error(),
+				"batch": result.Batch, "guard": result.Guard, "warning": err.Error(),
 			})
 		}
 		return err
 	}
 	return jsonOK(c, http.StatusCreated, fiber.Map{
-		"batch": result.Batch, "rules": result.Rules,
+		"batch": result.Batch, "guard": result.Guard,
 	})
 }
 
@@ -245,18 +245,9 @@ func (s *Server) previewLaunch(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	guards := make([]string, 0)
-	for _, rule := range request.SharedRules {
-		guards = append(guards, rule.Guard.Describe(""))
-	}
-	for _, rules := range request.AccountRules {
-		for _, rule := range rules {
-			guards = append(guards, rule.Guard.Describe(""))
-		}
-	}
 	return jsonOK(c, http.StatusOK, fiber.Map{
 		"hierarchy":   hierarchy,
-		"guards":      guards,
+		"checkpoints": request.Checkpoints,
 		"ad_accounts": len(request.AdAccountIDs),
 	})
 }

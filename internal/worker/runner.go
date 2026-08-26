@@ -21,7 +21,8 @@ type JobService interface {
 	SyncConnection(context.Context, uuid.UUID) (application.SyncSummary, error)
 	PublishAccountResult(context.Context, uuid.UUID) error
 	CollectInsights(context.Context, uuid.UUID) error
-	EvaluateDueRules(context.Context, *uuid.UUID) error
+	EvaluateDueGuards(context.Context, *uuid.UUID) error
+	SyncTrackerStats(context.Context) error
 
 	RunAdEntitiesJob(context.Context, application.AdEntitiesJobPayload) error
 	RunAccountInsightsJob(context.Context, application.AccountInsightsJobPayload) error
@@ -280,8 +281,10 @@ func (r *Runner) dispatch(ctx context.Context, job *domain.Job) error {
 		}
 		return r.service.CollectInsights(ctx, payload.ConnectionID)
 
-	case application.JobEvaluateRules:
-		var payload application.EvaluateRulesJobPayload
+	case application.JobSyncTracker:
+		return r.service.SyncTrackerStats(ctx)
+	case application.JobEvaluateGuards:
+		var payload application.EvaluateGuardsJobPayload
 		if err := decodeJobPayload(job, &payload); err != nil {
 			return err
 		}
@@ -292,7 +295,7 @@ func (r *Runner) dispatch(ctx context.Context, job *domain.Job) error {
 		} else if job.ConnectionID != nil {
 			return errors.New("worker: evaluate_rules payload.connection_id is required for a connection-scoped job")
 		}
-		return r.service.EvaluateDueRules(ctx, payload.ConnectionID)
+		return r.service.EvaluateDueGuards(ctx, payload.ConnectionID)
 
 	case application.JobSyncAdEntities:
 		var payload application.AdEntitiesJobPayload

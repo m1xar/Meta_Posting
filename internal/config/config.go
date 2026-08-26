@@ -24,7 +24,21 @@ type Config struct {
 	AllowLegacyInternalToken bool
 	TokenEncryptionKey       []byte
 	Meta                     MetaConfig
+	Keitaro                  KeitaroConfig
 	Worker                   WorkerConfig
+}
+
+// KeitaroConfig points the service at the Keitaro tracker Admin API. When the
+// base URL or API key is empty the tracker sync stays disabled and guard
+// checkpoints only see Facebook metrics.
+type KeitaroConfig struct {
+	BaseURL        string
+	APIKey         string
+	RequestTimeout time.Duration
+}
+
+func (k KeitaroConfig) Enabled() bool {
+	return strings.TrimSpace(k.BaseURL) != "" && strings.TrimSpace(k.APIKey) != ""
 }
 
 type MetaConfig struct {
@@ -42,7 +56,10 @@ type WorkerConfig struct {
 	Concurrency      int
 	PollInterval     time.Duration
 	InsightsInterval time.Duration
-	RuleInterval     time.Duration
+	// GuardInterval is the standard cadence for spend-checkpoint guards; a
+	// guard may ask for less and ride the fast lane instead.
+	GuardInterval    time.Duration
+	TrackerInterval  time.Duration
 	JobLeaseDuration time.Duration
 	MaxAttempts      int
 
@@ -98,7 +115,21 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	ruleInterval, err := envDuration("RULE_EVALUATION_INTERVAL", 15*time.Minute)
+	guardIntervalDefault := 5 * time.Minute
+	if legacy := strings.TrimSpace(os.Getenv("RULE_EVALUATION_INTERVAL")); legacy != "" {
+		if parsed, parseErr := time.ParseDuration(legacy); parseErr == nil && parsed > 0 {
+			guardIntervalDefault = parsed
+		}
+	}
+	guardInterval, err := envDuration("GUARD_EVALUATION_INTERVAL", guardIntervalDefault)
+	if err != nil {
+		return Config{}, err
+	}
+	trackerInterval, err := envDuration("KEITARO_POLL_INTERVAL", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	keitaroTimeout, err := envDuration("KEITARO_REQUEST_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -189,11 +220,17 @@ func Load() (Config, error) {
 			RequestTimeout: requestTimeout,
 			UploadTimeout:  uploadTimeout,
 		},
+		Keitaro: KeitaroConfig{
+			BaseURL:        strings.TrimSpace(os.Getenv("KEITARO_BASE_URL")),
+			APIKey:         strings.TrimSpace(os.Getenv("KEITARO_API_KEY")),
+			RequestTimeout: keitaroTimeout,
+		},
 		Worker: WorkerConfig{
 			Concurrency:      workerConcurrency,
 			PollInterval:     pollInterval,
 			InsightsInterval: insightsInterval,
-			RuleInterval:     ruleInterval,
+			GuardInterval:    guardInterval,
+			TrackerInterval:  trackerInterval,
 			JobLeaseDuration: jobLeaseDuration,
 			MaxAttempts:      maxAttempts,
 
@@ -247,7 +284,8 @@ func (c Config) Validate() error {
 		"META_UPLOAD_TIMEOUT":           c.Meta.UploadTimeout,
 		"WORKER_POLL_INTERVAL":          c.Worker.PollInterval,
 		"INSIGHTS_POLL_INTERVAL":        c.Worker.InsightsInterval,
-		"RULE_EVALUATION_INTERVAL":      c.Worker.RuleInterval,
+		"GUARD_EVALUATION_INTERVAL":     c.Worker.GuardInterval,
+		"KEITARO_POLL_INTERVAL":         c.Worker.TrackerInterval,
 		"JOB_LEASE_DURATION":            c.Worker.JobLeaseDuration,
 		"FAST_RULE_LANE_INTERVAL":       c.Worker.FastLaneInterval,
 		"DISCOVERY_INTERVAL":            c.Worker.DiscoveryInterval,

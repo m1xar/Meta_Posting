@@ -21,25 +21,19 @@ type LaunchRequest struct {
 	// When present it is composed into Hierarchy, so the API accepts either
 	// and the UI never has to assemble Meta's nested shape by hand.
 	Form *LaunchForm `json:"form,omitempty"`
-	// SharedRules apply to every account in the batch.
-	SharedRules []LaunchRuleRequest `json:"shared_rules,omitempty"`
-	// AccountRules are keyed by ad account ID and apply to that account only.
-	// They are additional to SharedRules, not a replacement.
-	AccountRules map[string][]LaunchRuleRequest `json:"account_rules,omitempty"`
-	// MirrorToMeta also registers each guard in Meta's own rules library, so
-	// it keeps working while this service is down. Meta evaluates on its own
-	// far slower schedule, so this is a backstop rather than a substitute.
-	MirrorToMeta bool `json:"mirror_to_meta,omitempty"`
+	// Checkpoints is the spend ladder guarding every campaign this batch
+	// publishes. Empty means the batch launches unguarded, which the UI
+	// treats as an explicit choice rather than a default.
+	Checkpoints []GuardCheckpoint `json:"checkpoints,omitempty"`
+	GuardName   string            `json:"guard_name,omitempty"`
+	// GuardIntervalSeconds overrides the default evaluation cadence.
+	GuardIntervalSeconds int64 `json:"guard_interval_seconds,omitempty"`
 }
 
 // LaunchResult reports what was created.
 type LaunchResult struct {
-	Batch *domain.Batch            `json:"batch"`
-	Rules []*domain.AutomationRule `json:"rules"`
-	// Mirrors lists the guards also registered inside Meta. Fewer mirrors
-	// than rules is normal: Meta's rule vocabulary is narrower, and a guard
-	// it cannot express is left unmirrored rather than approximated.
-	Mirrors []*domain.RuleMirror `json:"mirrors,omitempty"`
+	Batch *domain.Batch         `json:"batch"`
+	Guard *domain.CampaignGuard `json:"guard,omitempty"`
 }
 
 // Launch creates the batch and its guards.
@@ -70,72 +64,51 @@ func (s *Service) Launch(ctx context.Context, request LaunchRequest) (LaunchResu
 	}
 	request.Hierarchy = composed
 
-	// Guards are validated before anything is created. A rejected guard after
-	// a successful publish would leave live campaigns with no stop condition,
-	// which is the one outcome this endpoint exists to prevent.
-	if err := s.validateLaunchRules(request); err != nil {
-		return LaunchResult{}, err
+	// The ladder is validated before anything is created. A rejected guard
+	// after a successful publish would leave live campaigns with no stop
+	// condition, which is the one outcome this endpoint exists to prevent.
+	if len(request.Checkpoints) > 0 {
+		if _, err := normalizeCheckpoints(request.Checkpoints); err != nil {
+			return LaunchResult{}, err
+		}
 	}
-
-	currency := s.launchCurrency(ctx, request.AdAccountIDs)
 
 	batch, err := s.CreateBatch(ctx, request.CreateBatchRequest)
 	if err != nil {
 		return LaunchResult{}, err
 	}
 
-	created := make([]*domain.AutomationRule, 0, len(request.SharedRules))
-	var failures []error
-
-	for _, ruleRequest := range request.SharedRules {
-		rule, ruleErr := s.createLaunchRule(ctx, request.ConnectionID, batch.ID, nil, ruleRequest, currency)
-		if ruleErr != nil {
-			failures = append(failures, ruleErr)
-			continue
+	var guard *domain.CampaignGuard
+	if len(request.Checkpoints) > 0 {
+		name := request.GuardName
+		if name == "" {
+			name = "Guard " + batch.Name
 		}
-		created = append(created, rule)
-	}
-
-	for accountID, ruleRequests := range request.AccountRules {
-		parsed, parseErr := uuid.Parse(accountID)
-		if parseErr != nil {
-			failures = append(failures, invalid("account_rules", fmt.Sprintf("%q is not a UUID", accountID)))
-			continue
-		}
-		for _, ruleRequest := range ruleRequests {
-			rule, ruleErr := s.createLaunchRule(ctx, request.ConnectionID, batch.ID, &parsed, ruleRequest, currency)
-			if ruleErr != nil {
-				failures = append(failures, ruleErr)
-				continue
-			}
-			created = append(created, rule)
-		}
-	}
-
-	if len(failures) > 0 {
-		// The batch is already queued and cannot be unmade, so the guards
-		// that did attach are reported alongside the failures rather than
-		// discarded. A caller seeing this must decide whether to stop the
-		// batch or add the missing guard by hand.
-		s.audit(ctx, domain.AuditEvent{
-			ConnectionID: &request.ConnectionID,
-			ActorType:    "user",
-			Action:       "launch.guards_incomplete",
-			EntityType:   "batch",
-			EntityID:     batch.ID.String(),
-			Severity:     domain.AuditWarning,
-			Metadata: domain.MustJSON(map[string]any{
-				"attached": len(created),
-				"failed":   len(failures),
-			}),
+		guard, err = s.CreateGuard(ctx, CreateGuardRequest{
+			ConnectionID:              request.ConnectionID,
+			BatchID:                   &batch.ID,
+			Name:                      name,
+			Checkpoints:               request.Checkpoints,
+			EvaluationIntervalSeconds: request.GuardIntervalSeconds,
 		})
-		return LaunchResult{Batch: batch, Rules: created}, fmt.Errorf(
-			"batch %s was queued but %d guard(s) failed to attach: %w",
-			batch.ID, len(failures), failures[0],
-		)
+		if err != nil {
+			// The batch is already queued and cannot be unmade. A caller
+			// seeing this must decide whether to stop the batch or attach
+			// the guard by hand.
+			s.audit(ctx, domain.AuditEvent{
+				ConnectionID: &request.ConnectionID,
+				ActorType:    "user",
+				Action:       "launch.guard_failed",
+				EntityType:   "batch",
+				EntityID:     batch.ID.String(),
+				Severity:     domain.AuditWarning,
+				Metadata:     domain.MustJSON(map[string]any{"error": err.Error()}),
+			})
+			return LaunchResult{Batch: batch}, fmt.Errorf(
+				"batch %s was queued but its guard failed to attach: %w", batch.ID, err,
+			)
+		}
 	}
-
-	mirrors := s.mirrorLaunchRules(ctx, request, created)
 
 	s.audit(ctx, domain.AuditEvent{
 		ConnectionID: &request.ConnectionID,
@@ -146,91 +119,10 @@ func (s *Service) Launch(ctx context.Context, request LaunchRequest) (LaunchResu
 		Severity:     domain.AuditInfo,
 		Metadata: domain.MustJSON(map[string]any{
 			"ad_accounts": len(request.AdAccountIDs),
-			"guards":      len(created),
-			"mirrors":     len(mirrors),
+			"guarded":     guard != nil,
 		}),
 	})
-	return LaunchResult{Batch: batch, Rules: created, Mirrors: mirrors}, nil
-}
-
-// mirrorLaunchRules registers each guard inside Meta as a backstop.
-//
-// Best-effort on purpose: the primary guard is already active, and a missing
-// backstop is a far smaller problem than a launch that failed because Meta's
-// rules library was briefly unavailable. Failures are audited, not raised.
-func (s *Service) mirrorLaunchRules(
-	ctx context.Context,
-	request LaunchRequest,
-	rules []*domain.AutomationRule,
-) []*domain.RuleMirror {
-	if !request.MirrorToMeta || len(rules) == 0 {
-		return nil
-	}
-	var mirrors []*domain.RuleMirror
-	for _, rule := range rules {
-		targets := request.AdAccountIDs
-		// A per-account guard mirrors only onto its own account.
-		if rule.AdAccountID != nil {
-			targets = []uuid.UUID{*rule.AdAccountID}
-		}
-		for _, accountID := range targets {
-			mirror, err := s.MirrorRuleToMeta(ctx, rule, accountID)
-			if err != nil {
-				s.audit(ctx, domain.AuditEvent{
-					ConnectionID: &request.ConnectionID,
-					ActorType:    "user",
-					Action:       "launch.mirror_failed",
-					EntityType:   "automation_rule",
-					EntityID:     rule.ID.String(),
-					Severity:     domain.AuditWarning,
-					Metadata: domain.MustJSON(map[string]string{
-						"ad_account_id": accountID.String(),
-						"error":         truncateError(err),
-					}),
-				})
-				continue
-			}
-			mirrors = append(mirrors, mirror)
-		}
-	}
-	return mirrors
-}
-
-func (s *Service) validateLaunchRules(request LaunchRequest) error {
-	for _, rule := range request.SharedRules {
-		if _, err := rule.ToCreateRule("USD"); err != nil {
-			return err
-		}
-	}
-	for accountID, rules := range request.AccountRules {
-		if _, err := uuid.Parse(accountID); err != nil {
-			return invalid("account_rules", fmt.Sprintf("%q is not a UUID", accountID))
-		}
-		for _, rule := range rules {
-			if _, err := rule.ToCreateRule("USD"); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func (s *Service) createLaunchRule(
-	ctx context.Context,
-	connectionID, batchID uuid.UUID,
-	adAccountID *uuid.UUID,
-	request LaunchRuleRequest,
-	currency string,
-) (*domain.AutomationRule, error) {
-	create, err := request.ToCreateRule(currency)
-	if err != nil {
-		return nil, err
-	}
-	create.ConnectionID = connectionID
-	create.BatchID = &batchID
-	create.AdAccountID = adAccountID
-	create.Status = domain.RuleActive
-	return s.CreateRule(ctx, create)
+	return LaunchResult{Batch: batch, Guard: guard}, nil
 }
 
 // launchCurrency reports the currency shared by the targeted accounts, used

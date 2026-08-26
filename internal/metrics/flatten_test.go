@@ -1,4 +1,4 @@
-package rules
+package metrics
 
 import (
 	"testing"
@@ -101,4 +101,13 @@ func TestFlattenInsightsJSONRejectsTrailingValue(t *testing.T) {
 	if _, err := FlattenInsightsJSON([]byte(`{"spend":"1"} {"spend":"2"}`)); err == nil {
 		t.Fatal("FlattenInsightsJSON() error = nil, want trailing value error")
 	}
+}
+
+func almostEqual(a, b float64) bool {
+	const epsilon = 1e-9
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= epsilon
 }

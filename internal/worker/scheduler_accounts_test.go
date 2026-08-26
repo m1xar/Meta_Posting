@@ -38,7 +38,7 @@ func TestPerAccountJobsAreNotRecurringJobs(t *testing.T) {
 
 	// The connection-scoped ones must stay recurring.
 	require.True(t, isRecurringJob(application.JobCollectInsights))
-	require.True(t, isRecurringJob(application.JobEvaluateRules))
+	require.True(t, isRecurringJob(application.JobEvaluateGuards))
 }
 
 func TestStaggerDelaySpreadsJobsAcrossTheInterval(t *testing.T) {

@@ -58,8 +58,8 @@ func TestRunnerDispatchesSupportedJobs(t *testing.T) {
 		},
 		{
 			name:       "rules",
-			jobType:    application.JobEvaluateRules,
-			payload:    domain.MustJSON(application.EvaluateRulesJobPayload{ConnectionID: &connectionID}),
+			jobType:    application.JobEvaluateGuards,
+			payload:    domain.MustJSON(application.EvaluateGuardsJobPayload{ConnectionID: &connectionID}),
 			connection: &connectionID,
 			assertCall: func(t *testing.T, service *fakeJobService) {
 				require.Len(t, service.ruleCalls, 1)
@@ -290,7 +290,9 @@ func (s *fakeJobService) CollectInsights(ctx context.Context, id uuid.UUID) erro
 	return err
 }
 
-func (s *fakeJobService) EvaluateDueRules(_ context.Context, id *uuid.UUID) error {
+func (s *fakeJobService) SyncTrackerStats(_ context.Context) error { return nil }
+
+func (s *fakeJobService) EvaluateDueGuards(_ context.Context, id *uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if id == nil {

@@ -185,11 +185,11 @@ func (r *InsightsCursorRepository) AllAdAccountsForBackfill(
 }
 
 // ConnectionsWithFastRules returns connections holding at least one active
-// rule that asks to be evaluated more often than the standard cadence.
+// guard that asks to be evaluated more often than the standard cadence.
 //
-// A rule may legitimately ask for a 60-second interval, but the scheduler
+// A guard may legitimately ask for a 60-second interval, but the scheduler
 // ticks every fifteen minutes and insights are collected on the same cadence,
-// so without a fast lane the rule silently runs at fifteen-minute resolution
+// so without a fast lane the guard silently runs at fifteen-minute resolution
 // against fifteen-minute-old numbers. This is how the lane finds its members.
 func (r *InsightsCursorRepository) ConnectionsWithFastRules(
 	ctx context.Context,
@@ -198,13 +198,13 @@ func (r *InsightsCursorRepository) ConnectionsWithFastRules(
 ) ([]uuid.UUID, error) {
 	var ids []uuid.UUID
 	err := r.db.WithContext(ctx).Raw(`
-		SELECT DISTINCT r.connection_id
-		FROM automation_rules r
-		JOIN meta_connections c ON c.id = r.connection_id
-		WHERE r.status = ?
+		SELECT DISTINCT g.connection_id
+		FROM campaign_guards g
+		JOIN meta_connections c ON c.id = g.connection_id
+		WHERE g.status = ?
 		  AND c.status = ?
-		  AND r.evaluation_interval_seconds <= ?
-		ORDER BY r.connection_id
-	`, domain.RuleActive, domain.MetaConnectionActive, maxIntervalSeconds).Scan(&ids).Error
+		  AND g.evaluation_interval_seconds <= ?
+		ORDER BY g.connection_id
+	`, domain.GuardActive, domain.MetaConnectionActive, maxIntervalSeconds).Scan(&ids).Error
 	return ids, err
 }

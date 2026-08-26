@@ -1,4 +1,4 @@
-package rules
+package metrics
 
 import (
 	"bytes"

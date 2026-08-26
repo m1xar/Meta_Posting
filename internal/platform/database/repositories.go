@@ -26,7 +26,8 @@ type Repositories struct {
 	AdEntities      *AdEntityRepository
 	AdAccountSync   *AdAccountSyncStateRepository
 	InsightsCursors *InsightsCursorRepository
-	Rules           *RuleRepository
+	Guards          *GuardRepository
+	Tracker         *TrackerRepository
 	Audit           *AuditRepository
 }
 
@@ -50,7 +51,8 @@ func (r *Repositories) bind() {
 	r.AdEntities = &AdEntityRepository{db: r.db}
 	r.AdAccountSync = &AdAccountSyncStateRepository{db: r.db}
 	r.InsightsCursors = &InsightsCursorRepository{db: r.db}
-	r.Rules = &RuleRepository{db: r.db}
+	r.Guards = &GuardRepository{db: r.db}
+	r.Tracker = &TrackerRepository{db: r.db}
 	r.Audit = &AuditRepository{db: r.db}
 }
 

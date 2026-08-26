@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-ads/internal/application"
 	"github.com/watchers-factory/raze-ads/internal/domain"
-	"github.com/watchers-factory/raze-ads/internal/rules"
 )
 
 type registerRequest struct {
@@ -25,9 +24,9 @@ type loginRequest struct {
 }
 
 type createUserBatchRequest struct {
-	Batch             application.CreateBatchRequest `json:"batch"`
-	AutoStopSpend     float64                        `json:"auto_stop_spend,omitempty"`
-	RuleLookbackHours int64                          `json:"rule_lookback_hours,omitempty"`
+	Batch       application.CreateBatchRequest `json:"batch"`
+	Checkpoints []application.GuardCheckpoint  `json:"checkpoints,omitempty"`
+	GuardName   string                         `json:"guard_name,omitempty"`
 }
 
 func (s *Server) registerUser(c fiber.Ctx) error {
@@ -161,13 +160,13 @@ func (s *Server) appOverview(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	automationRules, err := s.service.Repos.Users.ListRules(c.Context(), session.User.ID, 50)
+	guards, err := s.service.Repos.Users.ListGuards(c.Context(), session.User.ID, 100)
 	if err != nil {
 		return err
 	}
 	return jsonOK(c, http.StatusOK, fiber.Map{
 		"user": session.User, "connections": connections, "ad_accounts": accounts, "assets": assets,
-		"batches": batches, "rules": automationRules,
+		"batches": batches, "guards": guards,
 	})
 }
 
@@ -212,70 +211,26 @@ func (s *Server) createUserBatch(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	var rule *domain.AutomationRule
-	if request.AutoStopSpend > 0 {
-		lookbackHours := request.RuleLookbackHours
-		if lookbackHours <= 0 {
-			lookbackHours = 24
+	var guard *domain.CampaignGuard
+	if len(request.Checkpoints) > 0 {
+		name := request.GuardName
+		if name == "" {
+			name = "Guard " + batch.Name
 		}
-		rule, err = s.service.CreateRule(c.Context(), application.CreateRuleRequest{
+		guard, err = s.service.CreateGuard(c.Context(), application.CreateGuardRequest{
 			ConnectionID: request.Batch.ConnectionID,
 			BatchID:      &batch.ID,
-			Name:         "Auto-stop " + batch.Name,
-			Status:       domain.RuleActive,
-			ScopeLevel:   domain.InsightCampaign,
-			Action:       domain.RuleActionPause,
-			Conditions: rules.Group{Logic: rules.LogicAll, Conditions: []rules.Condition{{
-				Metric: "spend", Operator: rules.OperatorGTE, Threshold: request.AutoStopSpend,
-			}}},
-			LookbackSeconds:           lookbackHours * 3600,
-			EvaluationIntervalSeconds: 300,
+			Name:         name,
+			Checkpoints:  request.Checkpoints,
 		})
 		if err != nil {
 			return err
 		}
 	}
-	return jsonOK(c, http.StatusAccepted, fiber.Map{"batch": batch, "rule": rule})
+	return jsonOK(c, http.StatusAccepted, fiber.Map{"batch": batch, "guard": guard})
 }
 
-func (s *Server) createUserRule(c fiber.Ctx) error {
-	session, err := currentUserSession(c)
-	if err != nil {
-		return err
-	}
-	var request application.CreateRuleRequest
-	if err := decodeJSON(c, &request); err != nil {
-		return err
-	}
-	if err := s.service.Repos.Users.OwnsConnection(c.Context(), session.User.ID, request.ConnectionID); err != nil {
-		return err
-	}
-	if request.AdAccountID != nil {
-		if err := s.service.Repos.Users.OwnsAdAccount(c.Context(), session.User.ID, *request.AdAccountID); err != nil {
-			return err
-		}
-	}
-	if request.BatchID != nil {
-		if err := s.service.Repos.Users.OwnsBatch(c.Context(), session.User.ID, *request.BatchID); err != nil {
-			return err
-		}
-	}
-	rule, err := s.service.CreateRule(c.Context(), request)
-	if err != nil {
-		return err
-	}
-	return jsonOK(c, http.StatusCreated, rule)
-}
-
-func (s *Server) enableUserRule(c fiber.Ctx) error {
-	return s.setUserRuleStatus(c, domain.RuleActive)
-}
-
-func (s *Server) disableUserRule(c fiber.Ctx) error {
-	return s.setUserRuleStatus(c, domain.RuleDisabled)
-}
-
-func (s *Server) setUserRuleStatus(c fiber.Ctx, status domain.RuleStatus) error {
+func (s *Server) updateUserGuard(c fiber.Ctx) error {
 	session, err := currentUserSession(c)
 	if err != nil {
 		return err
@@ -284,14 +239,18 @@ func (s *Server) setUserRuleStatus(c fiber.Ctx, status domain.RuleStatus) error 
 	if err != nil {
 		return err
 	}
-	if err := s.service.Repos.Users.OwnsRule(c.Context(), session.User.ID, id); err != nil {
+	if err := s.service.Repos.Users.OwnsGuard(c.Context(), session.User.ID, id); err != nil {
 		return err
 	}
-	rule, err := s.service.SetRuleStatus(c.Context(), id, status)
+	var request application.UpdateGuardRequest
+	if err := decodeJSON(c, &request); err != nil {
+		return err
+	}
+	guard, err := s.service.UpdateGuard(c.Context(), id, request)
 	if err != nil {
 		return err
 	}
-	return jsonOK(c, http.StatusOK, rule)
+	return jsonOK(c, http.StatusOK, guard)
 }
 
 // userOwnsMediaContext verifies the caller may attach media to the named

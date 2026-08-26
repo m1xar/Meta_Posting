@@ -422,8 +422,8 @@ func (s *Scheduler) ScheduleFastLane(
 				domain.MustJSON(application.InsightsJobPayload{ConnectionID: connection}),
 			},
 			{
-				application.JobEvaluateRules, 21,
-				domain.MustJSON(application.EvaluateRulesJobPayload{ConnectionID: &connection}),
+				application.JobEvaluateGuards, 21,
+				domain.MustJSON(application.EvaluateGuardsJobPayload{ConnectionID: &connection}),
 			},
 		} {
 			dedupeKey := fmt.Sprintf("%s:fast:%s:%s", connection, spec.jobType, bucket)

@@ -227,29 +227,19 @@ const (
 	InsightAd       InsightLevel = "ad"
 )
 
-type RuleStatus string
+type GuardStatus string
 
 const (
-	RuleActive   RuleStatus = "active"
-	RuleDisabled RuleStatus = "disabled"
-	RuleArchived RuleStatus = "archived"
+	GuardActive   GuardStatus = "active"
+	GuardDisabled GuardStatus = "disabled"
 )
 
-type RuleAction string
+type GuardCheckStatus string
 
 const (
-	RuleActionPause RuleAction = "pause"
-)
-
-type RuleEvaluationStatus string
-
-const (
-	RuleEvaluationNoMatch         RuleEvaluationStatus = "no_match"
-	RuleEvaluationMatched         RuleEvaluationStatus = "matched"
-	RuleEvaluationActionSucceeded RuleEvaluationStatus = "action_succeeded"
-	RuleEvaluationActionFailed    RuleEvaluationStatus = "action_failed"
-	RuleEvaluationSkipped         RuleEvaluationStatus = "skipped"
-	RuleEvaluationError           RuleEvaluationStatus = "error"
+	GuardCheckPassed     GuardCheckStatus = "passed"
+	GuardCheckFailed     GuardCheckStatus = "failed"
+	GuardCheckOverridden GuardCheckStatus = "overridden"
 )
 
 type AuditSeverity string

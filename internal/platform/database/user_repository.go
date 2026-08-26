@@ -163,11 +163,25 @@ func (r *UserRepository) OwnsBatch(ctx context.Context, userID, batchID uuid.UUI
 	return nil
 }
 
-func (r *UserRepository) OwnsRule(ctx context.Context, userID, ruleID uuid.UUID) error {
+func (r *UserRepository) OwnsGuard(ctx context.Context, userID, guardID uuid.UUID) error {
 	var count int64
-	err := r.db.WithContext(ctx).Table("automation_rules AS r").
-		Joins("JOIN meta_connections AS c ON c.id = r.connection_id").
-		Where("r.id = ? AND c.user_id = ?", ruleID, userID).Count(&count).Error
+	err := r.db.WithContext(ctx).Table("campaign_guards AS g").
+		Joins("JOIN meta_connections AS c ON c.id = g.connection_id").
+		Where("g.id = ? AND c.user_id = ?", guardID, userID).Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (r *UserRepository) OwnsPublishedObject(ctx context.Context, userID, objectID uuid.UUID) error {
+	var count int64
+	err := r.db.WithContext(ctx).Table("published_objects AS p").
+		Joins("JOIN meta_connections AS c ON c.id = p.connection_id").
+		Where("p.id = ? AND c.user_id = ?", objectID, userID).Count(&count).Error
 	if err != nil {
 		return err
 	}
@@ -224,14 +238,27 @@ func (r *UserRepository) ListBatches(ctx context.Context, userID uuid.UUID, limi
 	return items, err
 }
 
-func (r *UserRepository) ListRules(ctx context.Context, userID uuid.UUID, limit int) ([]domain.AutomationRule, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 50
+func (r *UserRepository) ListGuards(ctx context.Context, userID uuid.UUID, limit int) ([]domain.CampaignGuard, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
 	}
-	var items []domain.AutomationRule
-	err := r.db.WithContext(ctx).Table("automation_rules AS r").Select("r.*").
-		Joins("JOIN meta_connections AS c ON c.id = r.connection_id").
+	var items []domain.CampaignGuard
+	err := r.db.WithContext(ctx).Table("campaign_guards AS g").Select("g.*").
+		Joins("JOIN meta_connections AS c ON c.id = g.connection_id").
 		Where("c.user_id = ?", userID).
-		Order("r.created_at DESC, r.id DESC").Limit(limit).Scan(&items).Error
+		Order("g.created_at DESC, g.id DESC").Limit(limit).Scan(&items).Error
+	return items, err
+}
+
+// ListCampaigns returns the user's published campaigns, newest first.
+func (r *UserRepository) ListCampaigns(ctx context.Context, userID uuid.UUID, limit int) ([]domain.PublishedObject, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	var items []domain.PublishedObject
+	err := r.db.WithContext(ctx).Table("published_objects AS p").Select("p.*").
+		Joins("JOIN meta_connections AS c ON c.id = p.connection_id").
+		Where("c.user_id = ? AND p.object_type = ?", userID, domain.PublishedCampaign).
+		Order("p.created_at DESC, p.id DESC").Limit(limit).Scan(&items).Error
 	return items, err
 }

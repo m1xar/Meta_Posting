@@ -21,6 +21,7 @@ import (
 	"github.com/watchers-factory/raze-ads/internal/application"
 	"github.com/watchers-factory/raze-ads/internal/config"
 	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/keitaro"
 	"github.com/watchers-factory/raze-ads/internal/meta"
 	platformcrypto "github.com/watchers-factory/raze-ads/internal/platform/crypto"
 	"github.com/watchers-factory/raze-ads/internal/platform/database"
@@ -85,6 +86,13 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("initialize application service: %w", err)
 	}
+	if cfg.Keitaro.Enabled() {
+		trackerClient, trackerErr := keitaro.NewClient(cfg.Keitaro.BaseURL, cfg.Keitaro.APIKey, cfg.Keitaro.RequestTimeout)
+		if trackerErr != nil {
+			return fmt.Errorf("initialize Keitaro client: %w", trackerErr)
+		}
+		service.Tracker = trackerClient
+	}
 
 	workerID := newWorkerID()
 	runners := make([]*worker.Runner, 0, cfg.Worker.Concurrency)
@@ -103,7 +111,7 @@ func run(logger *slog.Logger) error {
 	scheduleStore := worker.RepositoryScheduleStore{Repositories: repositories}
 	scheduler, err := worker.NewScheduler(scheduleStore, worker.SchedulerOptions{
 		InsightsInterval:    cfg.Worker.InsightsInterval,
-		RuleInterval:        cfg.Worker.RuleInterval,
+		RuleInterval:        cfg.Worker.GuardInterval,
 		MaintenanceInterval: cfg.Worker.MaintenanceInterval,
 		MaxAttempts:         cfg.Worker.MaxAttempts,
 		Logger:              logger,
@@ -140,6 +148,7 @@ func run(logger *slog.Logger) error {
 			},
 		},
 		FastLaneInterval:    cfg.Worker.FastLaneInterval,
+		TrackerInterval:     trackerIntervalIfEnabled(cfg),
 		FastRuleMaxInterval: cfg.Worker.FastRuleMaxInterval,
 		DiscoveryInterval:   cfg.Worker.DiscoveryInterval,
 		EntitySyncInterval:  cfg.Worker.EntitySyncInterval,
@@ -217,4 +226,13 @@ func productionHTTPClient(timeout time.Duration) *http.Client {
 		Transport: transport,
 		Timeout:   timeout,
 	}
+}
+
+// trackerIntervalIfEnabled keeps the tracker pass fully off when Keitaro is
+// not configured, instead of scheduling jobs that would no-op.
+func trackerIntervalIfEnabled(cfg config.Config) time.Duration {
+	if !cfg.Keitaro.Enabled() {
+		return 0
+	}
+	return cfg.Worker.TrackerInterval
 }

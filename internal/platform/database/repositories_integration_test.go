@@ -473,36 +473,59 @@ func TestRepositoriesPostgresIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, float64(25), after.Spend)
 
-	rule := &domain.AutomationRule{
+	batchID := objects.Items[0].BatchID
+	guard := &domain.CampaignGuard{
 		ConnectionID:              connection.ID,
-		AdAccountID:               &account.ID,
-		Name:                      "Pause no conversions",
-		Status:                    domain.RuleActive,
-		ScopeLevel:                domain.InsightCampaign,
-		Action:                    domain.RuleActionPause,
-		Conditions:                domain.MustJSON(map[string]any{"logic": "all", "conditions": []any{map[string]any{"metric": "spend", "operator": "gt", "threshold": 10}}}),
-		LookbackSeconds:           86400,
-		EvaluationIntervalSeconds: 900,
+		BatchID:                   &batchID,
+		Name:                      "Checkpoint ladder",
+		Status:                    domain.GuardActive,
+		Checkpoints:               domain.MustJSON([]map[string]any{{"spend": 5, "min_clicks": 10}}),
+		EvaluationIntervalSeconds: 300,
 		NextEvaluationAt:          now,
-		Metadata:                  domain.EmptyJSONObject,
 	}
-	require.NoError(t, repositories.Rules.Create(ctx, rule))
-	evaluation := &domain.RuleEvaluation{
-		RuleID:            rule.ID,
-		PublishedObjectID: &objects.Items[0].ID,
+	require.NoError(t, repositories.Guards.Create(ctx, guard))
+	check := &domain.GuardCheck{
+		GuardID:           guard.ID,
+		PublishedObjectID: objects.Items[0].ID,
 		MetaObjectID:      objects.Items[0].MetaObjectID,
-		Status:            domain.RuleEvaluationNoMatch,
-		WindowStart:       now.Add(-time.Hour),
-		WindowEnd:         now,
-		ObservedMetrics:   domain.MustJSON(map[string]float64{"spend": 10}),
-		ConditionResults:  domain.EmptyJSONObject,
-		ActionResponse:    domain.EmptyJSONObject,
+		CheckpointIndex:   0,
+		CheckpointSpend:   5,
+		Status:            domain.GuardCheckFailed,
+		Observed:          domain.MustJSON(map[string]float64{"spend": 6, "clicks": 2}),
+		Thresholds:        domain.MustJSON(map[string]any{"spend": 5, "min_clicks": 10}),
+		Paused:            true,
 		EvaluatedAt:       now,
 	}
-	require.NoError(t, repositories.Rules.SaveEvaluation(ctx, evaluation, now.Add(15*time.Minute)))
-	evaluations, err := repositories.Rules.ListEvaluations(ctx, RuleEvaluationFilter{RuleID: rule.ID})
+	require.NoError(t, repositories.Guards.SaveCheck(ctx, check))
+	// Re-saving the same checkpoint updates in place instead of duplicating.
+	recheck := *check
+	recheck.ID = uuid.Nil
+	recheck.Status = domain.GuardCheckPassed
+	require.NoError(t, repositories.Guards.SaveCheck(ctx, &recheck))
+	checks, err := repositories.Guards.ListChecks(ctx, guard.ID, nil)
 	require.NoError(t, err)
-	require.Len(t, evaluations.Items, 1)
+	require.Len(t, checks, 1)
+	require.Equal(t, domain.GuardCheckPassed, checks[0].Status)
+	require.NoError(t, repositories.Guards.MarkEvaluated(ctx, guard.ID, now, now.Add(5*time.Minute)))
+
+	trackerStat := domain.TrackerStat{
+		ConnectionID:      &connection.ID,
+		PublishedObjectID: &objects.Items[0].ID,
+		MetaCampaignID:    objects.Items[0].MetaObjectID,
+		CampaignName:      objects.Items[0].Name,
+		Clicks:            120,
+		Leads:             4,
+		Sales:             1,
+		Revenue:           100,
+		Raw:               domain.EmptyJSONObject,
+		LastSyncedAt:      now,
+	}
+	require.NoError(t, repositories.Tracker.UpsertMany(ctx, []domain.TrackerStat{trackerStat}))
+	trackerStat.Clicks = 140
+	require.NoError(t, repositories.Tracker.UpsertMany(ctx, []domain.TrackerStat{trackerStat}))
+	storedStat, err := repositories.Tracker.ForObject(ctx, objects.Items[0].ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(140), storedStat.Clicks)
 
 	require.NoError(t, repositories.Audit.Append(ctx, &domain.AuditEvent{
 		ConnectionID: &connection.ID,
@@ -812,7 +835,7 @@ func TestPublishJobDeadFinalizesBatchPostgres(t *testing.T) {
 	})
 }
 
-func TestRuleRepositoryListDueFiltersConnectionBeforeLimit(t *testing.T) {
+func TestGuardRepositoryListDueFiltersConnectionBeforeLimit(t *testing.T) {
 	databaseURL := os.Getenv("TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -861,35 +884,45 @@ func TestRuleRepositoryListDueFiltersConnectionBeforeLimit(t *testing.T) {
 
 	firstConnection, firstAccount := newConnectionWithAccount("first")
 	targetConnection, targetAccount := newConnectionWithAccount("target")
-	newRule := func(connectionID, accountID uuid.UUID, name string, dueAt time.Time) *domain.AutomationRule {
-		rule := &domain.AutomationRule{
-			ConnectionID:              connectionID,
-			AdAccountID:               &accountID,
-			Name:                      name,
-			Status:                    domain.RuleActive,
-			ScopeLevel:                domain.InsightCampaign,
-			Action:                    domain.RuleActionPause,
-			Conditions:                domain.MustJSON(map[string]any{"logic": "all", "conditions": []any{map[string]any{"metric": "spend", "operator": "gt", "threshold": 1}}}),
-			LookbackSeconds:           3600,
-			EvaluationIntervalSeconds: 900,
-			NextEvaluationAt:          dueAt,
-			Metadata:                  domain.EmptyJSONObject,
+	newGuard := func(connectionID, accountID uuid.UUID, name string, dueAt time.Time) *domain.CampaignGuard {
+		batch := &domain.Batch{
+			ConnectionID:   connectionID,
+			Name:           name,
+			Status:         domain.BatchRunning,
+			IdempotencyKey: uuid.NewString(),
+			Specification:  domain.EmptyJSONObject,
 		}
-		require.NoError(t, repositories.Rules.Create(ctx, rule))
-		return rule
+		result := domain.BatchAccountResult{
+			AdAccountID:  accountID,
+			Status:       domain.BatchAccountPending,
+			RequestJSON:  domain.EmptyJSONObject,
+			ResponseJSON: domain.EmptyJSONObject,
+		}
+		require.NoError(t, repositories.Batches.Create(ctx, batch, []domain.BatchAccountResult{result}))
+		guard := &domain.CampaignGuard{
+			ConnectionID:              connectionID,
+			BatchID:                   &batch.ID,
+			Name:                      name,
+			Status:                    domain.GuardActive,
+			Checkpoints:               domain.MustJSON([]map[string]any{{"spend": 1, "min_clicks": 1}}),
+			EvaluationIntervalSeconds: 300,
+			NextEvaluationAt:          dueAt,
+		}
+		require.NoError(t, repositories.Guards.Create(ctx, guard))
+		return guard
 	}
-	firstRule := newRule(firstConnection.ID, firstAccount.ID, "globally earliest", now.Add(-2*time.Hour))
-	targetRule := newRule(targetConnection.ID, targetAccount.ID, "target connection", now.Add(-time.Hour))
+	firstGuard := newGuard(firstConnection.ID, firstAccount.ID, "globally earliest", now.Add(-2*time.Hour))
+	targetGuard := newGuard(targetConnection.ID, targetAccount.ID, "target connection", now.Add(-time.Hour))
 
-	globalDue, err := repositories.Rules.ListDue(ctx, nil, now, 1)
+	globalDue, err := repositories.Guards.ListDue(ctx, nil, now, 1)
 	require.NoError(t, err)
 	require.Len(t, globalDue, 1)
-	require.Equal(t, firstRule.ID, globalDue[0].ID)
+	require.Equal(t, firstGuard.ID, globalDue[0].ID)
 
-	connectionDue, err := repositories.Rules.ListDue(ctx, &targetConnection.ID, now, 1)
+	connectionDue, err := repositories.Guards.ListDue(ctx, &targetConnection.ID, now, 1)
 	require.NoError(t, err)
 	require.Len(t, connectionDue, 1)
-	require.Equal(t, targetRule.ID, connectionDue[0].ID)
+	require.Equal(t, targetGuard.ID, connectionDue[0].ID)
 }
 
 func insightFixture(

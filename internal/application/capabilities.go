@@ -2,7 +2,6 @@ package application
 
 import (
 	"github.com/watchers-factory/raze-ads/internal/meta"
-	"github.com/watchers-factory/raze-ads/internal/rules"
 )
 
 func (s *Service) Capabilities() Capabilities {
@@ -71,52 +70,14 @@ func (s *Service) Capabilities() Capabilities {
 			"existing_facebook_post",
 			"existing_instagram_media",
 		},
-		RuleOperators: []rules.Operator{
-			rules.OperatorGT,
-			rules.OperatorGTE,
-			rules.OperatorLT,
-			rules.OperatorLTE,
-			rules.OperatorEQ,
-			rules.OperatorNEQ,
-		},
-		RuleActions:      []rules.Action{rules.ActionPause},
-		RuleTargetLevels: []rules.TargetLevel{rules.TargetCampaign, rules.TargetAdSet, rules.TargetAd},
-		CommonRuleMetrics: []string{
+		GuardMetrics: []string{
 			"spend",
 			"impressions",
 			"clicks",
-			"unique_clicks",
-			"inline_link_clicks",
-			"ctr",
-			"cpc",
-			"cpm",
-			"actions.link_click",
-			"actions.landing_page_view",
-			"actions.view_content",
-			"actions.add_to_cart",
-			"actions.initiate_checkout",
-			"actions.complete_registration",
-			"actions.lead",
-			"actions.purchase",
-			"actions.subscribe",
-			"actions.*",
-			"actions.*.1d_click",
-			"actions.*.1d_view",
-			"actions.*.7d_click",
-			"actions.*.7d_view",
-			"action_values.*",
-			"conversions.*",
-			"conversion_values.*",
-			"cost_per_action_type.*",
-			"cost_per_conversion.*",
-			"cpa.*",
-			"conversion_cpa.*",
-			"roas.*",
-			"conversion_roas.*",
-			"outbound_clicks.*",
-			"outbound_clicks_ctr.*",
-			"video_play_actions.*",
-			"video_thruplay_watched_actions.*",
+			"tracker_clicks",
+			"tracker_leads",
+			"tracker_sales",
+			"tracker_revenue",
 		},
 		RawFieldsSupported: true,
 		ExcludedCapabilities: []string{
