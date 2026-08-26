@@ -1,1 +1,14 @@
-<!doctype html><title>stub</title>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · Raze Posting</title><link rel="stylesheet" href="/static/app.css"><style>
+body{display:grid;place-items:center;background:radial-gradient(circle at 20% 10%,#18324a 0,transparent 38%),#080b10}
+.authcard{width:min(92vw,420px);padding:32px;border:1px solid #283242;border-radius:22px;background:#10151ddd;box-shadow:0 30px 80px #0008}
+.eyebrow{color:#72d5ff;text-transform:uppercase;letter-spacing:.14em;font-size:12px}
+h1{font-size:32px;margin:10px 0 22px}
+label{display:grid;gap:8px;margin:14px 0;color:#aeb8c7;font-size:14px}
+.authcard button{width:100%;padding:13px;margin-top:6px}
+.error{min-height:24px;color:var(--bad);margin:10px 0}
+.alt{text-align:center;color:#8996a8;margin-top:18px}
+</style></head><body><main class="authcard"><div class="eyebrow">Raze Posting</div><h1 id="title">Sign in</h1><form id="auth"><label>Login<input name="login" autocomplete="username" minlength="3" maxlength="64" required></label><label>Password<input name="password" type="password" autocomplete="current-password" minlength="10" maxlength="128" required></label><div class="error" id="error"></div><button class="primary">Continue</button></form><div class="alt"><a class="link" id="alt" href="/register">Create account</a></div></main><script>
+const register=location.pathname==='/register';
+if(register){document.querySelector('#title').textContent='Create account';document.title='Create account · Raze Posting';const alt=document.querySelector('#alt');alt.textContent='Sign in';alt.href='/login'}
+document.querySelector('#auth').addEventListener('submit',async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;const f=new FormData(e.currentTarget);const r=await fetch(register?'/auth/register':'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(f))});if(r.ok){location='/app';return}const x=await r.json().catch(()=>({}));document.querySelector('#error').textContent=x.error?.message||'Request failed';b.disabled=false});
+</script></body></html>

@@ -1,1 +1,20 @@
-<!doctype html><title>stub</title>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard · Raze Posting</title><link rel="stylesheet" href="/static/app.css"></head><body><header></header><main class="shell"><section class="hero"><div><h1>Dashboard</h1><p>Сводные метрики по всем подключённым аккаунтам: спенд из Facebook, регистрации и депозиты из Keitaro.</p></div><a class="button primary" href="/app/launch">Запустить кампании →</a></section>
+<section class="cards" id="totals"></section>
+<section class="grid">
+<article class="panel" style="grid-column:span 4"><div class="row"><h2>Meta connections</h2><a class="button" href="/app/connect/meta">Connect</a></div><div id="connections" class="list"><span class="muted">Loading…</span></div></article>
+<article class="panel" style="grid-column:span 8"><h2>Ad accounts</h2><div class="scroll"><table><thead><tr><th>Account</th><th>Status</th><th>Currency</th><th class="num">Spent</th><th class="num">Balance</th></tr></thead><tbody id="accounts"></tbody></table></div></article>
+<article class="panel" style="grid-column:1/-1"><div class="row"><h2>Live campaigns</h2><a class="link" href="/app/campaigns">Все кампании →</a></div><div id="live"></div></article>
+</section></main><script src="/static/app.js"></script><script>
+let state=null;
+async function load(){state=await api('/app/api/overview');renderHeader('dashboard',state.user);render()}
+function render(){
+document.querySelector('#totals').innerHTML=totalsCards(state.totals||{});
+const cs=document.querySelector('#connections');
+if(!(state.connections||[]).length){cs.innerHTML='<span class="muted">Подключи Meta-аккаунт, чтобы начать.</span>'}
+else cs.replaceChildren(...state.connections.map(c=>{const d=document.createElement('div');d.className='rowitem';d.innerHTML='<div class="row"><strong>'+esc(c.display_name||c.meta_user_id)+'</strong><span class="pill">'+esc(c.status)+'</span></div><div class="muted">'+(c.last_synced_at?'Synced '+new Date(c.last_synced_at).toLocaleString():'Not synced')+'</div>';const b=document.createElement('button');b.textContent='Sync';b.style.marginTop='8px';b.onclick=async()=>{b.disabled=true;try{await api('/app/api/connections/'+c.id+'/sync',{method:'POST'});b.textContent='Queued'}catch(err){b.textContent='Error';b.title=err.message}};d.append(b);return d}));
+document.querySelector('#accounts').innerHTML=(state.ad_accounts||[]).map(a=>'<tr><td><a class="link" href="/app/accounts/'+a.id+'">'+esc(a.name||a.account_id)+'</a></td><td>'+(a.account_status===1&&a.is_active?'<span class="pill live">Active</span>':'<span class="pill failed">Unavailable</span>')+'</td><td>'+esc(a.currency)+'</td><td class="num">'+fmtNum(a.amount_spent_minor)+'</td><td class="num">'+fmtNum(a.balance_minor)+'</td></tr>').join('')||'<tr><td colspan="5" class="muted">Нет аккаунтов — подключи Meta и синхронизируйся.</td></tr>';
+const live=(state.campaigns||[]).filter(v=>['ACTIVE','IN_PROCESS','WITH_ISSUES'].includes(v.campaign.effective_status));
+document.querySelector('#live').innerHTML=live.length?campaignTable(live):'<div class="muted">Лайв-кампаний нет.</div>';
+}
+load();setInterval(load,60000);
+</script></body></html>

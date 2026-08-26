@@ -13,7 +13,7 @@ import (
 	"github.com/watchers-factory/raze-posting/internal/platform/database"
 )
 
-//go:embed webui/*.html
+//go:embed webui
 var webUI embed.FS
 
 type credentialsRequest struct {
@@ -568,6 +568,18 @@ func (s *Server) dashboardPage(c fiber.Ctx) error { return s.sendWebPage(c, "web
 func (s *Server) launcherPage(c fiber.Ctx) error  { return s.sendWebPage(c, "webui/launch.html") }
 func (s *Server) campaignsPage(c fiber.Ctx) error { return s.sendWebPage(c, "webui/campaigns.html") }
 func (s *Server) accountPage(c fiber.Ctx) error   { return s.sendWebPage(c, "webui/account.html") }
+
+func (s *Server) staticAsset(name, contentType string) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		content, err := webUI.ReadFile(name)
+		if err != nil {
+			return fiber.ErrNotFound
+		}
+		c.Set("Content-Type", contentType)
+		c.Set("Cache-Control", "public, max-age=300")
+		return c.Status(http.StatusOK).Send(content)
+	}
+}
 
 func (s *Server) sendWebPage(c fiber.Ctx, name string) error {
 	content, err := webUI.ReadFile(name)

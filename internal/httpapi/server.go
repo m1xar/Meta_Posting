@@ -118,6 +118,8 @@ func (s *Server) routes() {
 	s.App.Get("/terms", s.termsOfService)
 	s.App.Get("/data-deletion", s.dataDeletion)
 	s.App.Get("/oauth/facebook/callback", s.oauthCallback)
+	s.App.Get("/static/app.css", s.staticAsset("webui/app.css", "text/css; charset=utf-8"))
+	s.App.Get("/static/app.js", s.staticAsset("webui/app.js", "text/javascript; charset=utf-8"))
 	s.App.Get("/login", s.loginPage)
 	s.App.Get("/register", s.registerPage)
 	s.App.Post("/auth/login", s.loginUser)
