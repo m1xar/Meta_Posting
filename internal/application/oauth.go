@@ -18,10 +18,6 @@ import (
 
 const oauthSessionLifetime = 30 * time.Minute
 
-func (s *Service) StartOAuth(ctx context.Context) (OAuthStart, error) {
-	return s.StartOAuthForUser(ctx, domain.LegacyUserID)
-}
-
 func (s *Service) StartOAuthForUser(ctx context.Context, userID uuid.UUID) (OAuthStart, error) {
 	if userID == uuid.Nil {
 		return OAuthStart{}, invalid("user_id", "is required")

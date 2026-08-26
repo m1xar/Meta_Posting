@@ -21,7 +21,8 @@ type Repositories struct {
 	Batches         *BatchRepository
 	Jobs            *JobRepository
 	Insights        *InsightRepository
-	Rules           *RuleRepository
+	Guards          *GuardRepository
+	Tracker         *TrackerRepository
 	Audit           *AuditRepository
 }
 
@@ -40,7 +41,8 @@ func (r *Repositories) bind() {
 	r.Batches = &BatchRepository{db: r.db}
 	r.Jobs = &JobRepository{db: r.db}
 	r.Insights = &InsightRepository{db: r.db}
-	r.Rules = &RuleRepository{db: r.db}
+	r.Guards = &GuardRepository{db: r.db}
+	r.Tracker = &TrackerRepository{db: r.db}
 	r.Audit = &AuditRepository{db: r.db}
 }
 

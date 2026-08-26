@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-posting/internal/domain"
 	"github.com/watchers-factory/raze-posting/internal/meta"
-	"github.com/watchers-factory/raze-posting/internal/rules"
+	insightmetrics "github.com/watchers-factory/raze-posting/internal/metrics"
 )
 
 const (
@@ -392,7 +392,7 @@ func insightSnapshot(
 		if err != nil {
 			return domain.InsightSnapshot{}, err
 		}
-		flattened, err := rules.FlattenInsightsJSON(encoded)
+		flattened, err := insightmetrics.FlattenInsightsJSON(encoded)
 		if err != nil {
 			return domain.InsightSnapshot{}, err
 		}
@@ -406,7 +406,7 @@ func insightSnapshot(
 			dateStop = parsed
 		}
 	}
-	metrics = rules.WithDerivedMetrics(metrics)
+	metrics = insightmetrics.WithDerivedMetrics(metrics)
 	if dateStart.IsZero() {
 		dateStart = truncateDate(object.CreatedAt)
 	}

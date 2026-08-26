@@ -17,10 +17,23 @@ type Config struct {
 	HTTPAddress        string
 	DatabaseURL        string
 	UploadsDir         string
-	InternalAPIToken   string
 	TokenEncryptionKey []byte
 	Meta               MetaConfig
+	Keitaro            KeitaroConfig
 	Worker             WorkerConfig
+}
+
+// KeitaroConfig points the service at the Keitaro tracker Admin API. When the
+// base URL or API key is empty the tracker sync stays disabled and guard
+// checkpoints only see Facebook metrics.
+type KeitaroConfig struct {
+	BaseURL        string
+	APIKey         string
+	RequestTimeout time.Duration
+}
+
+func (k KeitaroConfig) Enabled() bool {
+	return strings.TrimSpace(k.BaseURL) != "" && strings.TrimSpace(k.APIKey) != ""
 }
 
 type MetaConfig struct {
@@ -38,7 +51,8 @@ type WorkerConfig struct {
 	Concurrency      int
 	PollInterval     time.Duration
 	InsightsInterval time.Duration
-	RuleInterval     time.Duration
+	GuardInterval    time.Duration
+	TrackerInterval  time.Duration
 	JobLeaseDuration time.Duration
 	MaxAttempts      int
 }
@@ -64,7 +78,15 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	ruleInterval, err := envDuration("RULE_EVALUATION_INTERVAL", 15*time.Minute)
+	guardInterval, err := envDuration("GUARD_EVALUATION_INTERVAL", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	trackerInterval, err := envDuration("KEITARO_POLL_INTERVAL", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	keitaroTimeout, err := envDuration("KEITARO_REQUEST_TIMEOUT", 30*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -86,7 +108,6 @@ func Load() (Config, error) {
 		HTTPAddress:        envOr("HTTP_ADDRESS", ":8080"),
 		DatabaseURL:        strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		UploadsDir:         envOr("UPLOADS_DIR", "./uploads"),
-		InternalAPIToken:   strings.TrimSpace(os.Getenv("INTERNAL_API_TOKEN")),
 		TokenEncryptionKey: encryptionKey,
 		Meta: MetaConfig{
 			AppID:          strings.TrimSpace(os.Getenv("META_APP_ID")),
@@ -98,11 +119,17 @@ func Load() (Config, error) {
 			RequestTimeout: requestTimeout,
 			UploadTimeout:  uploadTimeout,
 		},
+		Keitaro: KeitaroConfig{
+			BaseURL:        strings.TrimSpace(os.Getenv("KEITARO_BASE_URL")),
+			APIKey:         strings.TrimSpace(os.Getenv("KEITARO_API_KEY")),
+			RequestTimeout: keitaroTimeout,
+		},
 		Worker: WorkerConfig{
 			Concurrency:      workerConcurrency,
 			PollInterval:     pollInterval,
 			InsightsInterval: insightsInterval,
-			RuleInterval:     ruleInterval,
+			GuardInterval:    guardInterval,
+			TrackerInterval:  trackerInterval,
 			JobLeaseDuration: jobLeaseDuration,
 			MaxAttempts:      maxAttempts,
 		},
@@ -118,7 +145,6 @@ func (c Config) Validate() error {
 	var missing []string
 	for name, value := range map[string]string{
 		"DATABASE_URL":            c.DatabaseURL,
-		"INTERNAL_API_TOKEN":      c.InternalAPIToken,
 		"META_APP_ID":             c.Meta.AppID,
 		"META_APP_SECRET":         c.Meta.AppSecret,
 		"META_OAUTH_REDIRECT_URI": c.Meta.RedirectURI,
@@ -137,12 +163,13 @@ func (c Config) Validate() error {
 		return errors.New("META_API_VERSION must start with v")
 	}
 	for name, value := range map[string]time.Duration{
-		"META_REQUEST_TIMEOUT":     c.Meta.RequestTimeout,
-		"META_UPLOAD_TIMEOUT":      c.Meta.UploadTimeout,
-		"WORKER_POLL_INTERVAL":     c.Worker.PollInterval,
-		"INSIGHTS_POLL_INTERVAL":   c.Worker.InsightsInterval,
-		"RULE_EVALUATION_INTERVAL": c.Worker.RuleInterval,
-		"JOB_LEASE_DURATION":       c.Worker.JobLeaseDuration,
+		"META_REQUEST_TIMEOUT":      c.Meta.RequestTimeout,
+		"META_UPLOAD_TIMEOUT":       c.Meta.UploadTimeout,
+		"WORKER_POLL_INTERVAL":      c.Worker.PollInterval,
+		"INSIGHTS_POLL_INTERVAL":    c.Worker.InsightsInterval,
+		"GUARD_EVALUATION_INTERVAL": c.Worker.GuardInterval,
+		"KEITARO_POLL_INTERVAL":     c.Worker.TrackerInterval,
+		"JOB_LEASE_DURATION":        c.Worker.JobLeaseDuration,
 	} {
 		if value <= 0 {
 			return fmt.Errorf("%s must be greater than zero", name)

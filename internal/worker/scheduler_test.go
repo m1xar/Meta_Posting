@@ -22,7 +22,7 @@ func TestSchedulerEnqueuesPerConnectionWithStableBucket(t *testing.T) {
 	now := time.Date(2026, 7, 23, 12, 7, 30, 0, time.UTC)
 
 	require.NoError(t, scheduler.ScheduleInsights(context.Background(), now))
-	require.NoError(t, scheduler.ScheduleRuleEvaluations(context.Background(), now))
+	require.NoError(t, scheduler.ScheduleGuardEvaluations(context.Background(), now))
 	require.Len(t, store.jobs, 4)
 
 	for index, job := range store.jobs {
@@ -39,15 +39,15 @@ func TestSchedulerEnqueuesPerConnectionWithStableBucket(t *testing.T) {
 	}
 	require.Equal(t, application.JobCollectInsights, store.jobs[0].Type)
 	require.Equal(t, application.JobCollectInsights, store.jobs[1].Type)
-	require.Equal(t, application.JobEvaluateRules, store.jobs[2].Type)
-	require.Equal(t, application.JobEvaluateRules, store.jobs[3].Type)
+	require.Equal(t, application.JobEvaluateGuards, store.jobs[2].Type)
+	require.Equal(t, application.JobEvaluateGuards, store.jobs[3].Type)
 	require.Equal(t, 20, store.jobs[0].Priority)
 	require.Equal(t, 10, store.jobs[2].Priority)
 
 	var insights application.InsightsJobPayload
 	require.NoError(t, store.jobs[0].Payload.Decode(&insights))
 	require.Equal(t, first, insights.ConnectionID)
-	var rules application.EvaluateRulesJobPayload
+	var rules application.EvaluateGuardsJobPayload
 	require.NoError(t, store.jobs[2].Payload.Decode(&rules))
 	require.NotNil(t, rules.ConnectionID)
 	require.Equal(t, first, *rules.ConnectionID)
@@ -86,7 +86,7 @@ func newTestScheduler(t *testing.T, store ScheduleStore) *Scheduler {
 	t.Helper()
 	scheduler, err := NewScheduler(store, SchedulerOptions{
 		InsightsInterval:    15 * time.Minute,
-		RuleInterval:        15 * time.Minute,
+		GuardInterval:       15 * time.Minute,
 		MaintenanceInterval: time.Minute,
 		MaxAttempts:         7,
 		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),

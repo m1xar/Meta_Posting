@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-posting/internal/application"
 	"github.com/watchers-factory/raze-posting/internal/config"
+	"github.com/watchers-factory/raze-posting/internal/keitaro"
 	"github.com/watchers-factory/raze-posting/internal/meta"
 	platformcrypto "github.com/watchers-factory/raze-posting/internal/platform/crypto"
 	"github.com/watchers-factory/raze-posting/internal/platform/database"
@@ -79,6 +80,13 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("initialize application service: %w", err)
 	}
+	if cfg.Keitaro.Enabled() {
+		trackerClient, trackerErr := keitaro.NewClient(cfg.Keitaro.BaseURL, cfg.Keitaro.APIKey, cfg.Keitaro.RequestTimeout)
+		if trackerErr != nil {
+			return fmt.Errorf("initialize Keitaro client: %w", trackerErr)
+		}
+		service.Tracker = trackerClient
+	}
 
 	workerID := newWorkerID()
 	runners := make([]*worker.Runner, 0, cfg.Worker.Concurrency)
@@ -96,7 +104,9 @@ func run(logger *slog.Logger) error {
 	}
 	scheduler, err := worker.NewScheduler(worker.RepositoryScheduleStore{Repositories: repositories}, worker.SchedulerOptions{
 		InsightsInterval: cfg.Worker.InsightsInterval,
-		RuleInterval:     cfg.Worker.RuleInterval,
+		GuardInterval:    cfg.Worker.GuardInterval,
+		TrackerInterval:  cfg.Worker.TrackerInterval,
+		TrackerEnabled:   cfg.Keitaro.Enabled(),
 		MaxAttempts:      cfg.Worker.MaxAttempts,
 		Logger:           logger,
 	})

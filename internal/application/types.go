@@ -7,14 +7,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-posting/internal/domain"
 	"github.com/watchers-factory/raze-posting/internal/meta"
-	"github.com/watchers-factory/raze-posting/internal/rules"
 )
 
 const (
 	JobSyncConnection  = "sync_connection"
 	JobPublishAccount  = "publish_account"
 	JobCollectInsights = "collect_insights"
-	JobEvaluateRules   = "evaluate_rules"
+	JobEvaluateGuards  = "evaluate_guards"
+	JobSyncTracker     = "sync_tracker"
 )
 
 const LifetimeInsightQueryHash = "lifetime-default-v2"
@@ -83,30 +83,43 @@ type InsightsJobPayload struct {
 	ConnectionID uuid.UUID `json:"connection_id"`
 }
 
-type EvaluateRulesJobPayload struct {
+type EvaluateGuardsJobPayload struct {
 	ConnectionID *uuid.UUID `json:"connection_id,omitempty"`
 }
 
-type CreateRuleRequest struct {
-	ConnectionID              uuid.UUID           `json:"connection_id"`
-	AdAccountID               *uuid.UUID          `json:"ad_account_id,omitempty"`
-	BatchID                   *uuid.UUID          `json:"batch_id,omitempty"`
-	Name                      string              `json:"name"`
-	Status                    domain.RuleStatus   `json:"status,omitempty"`
-	ScopeLevel                domain.InsightLevel `json:"scope_level"`
-	Action                    domain.RuleAction   `json:"action,omitempty"`
-	Conditions                rules.Group         `json:"conditions"`
-	LookbackSeconds           int64               `json:"lookback_seconds"`
-	EvaluationIntervalSeconds int64               `json:"evaluation_interval_seconds,omitempty"`
-	GracePeriodSeconds        int64               `json:"grace_period_seconds,omitempty"`
-	CooldownSeconds           int64               `json:"cooldown_seconds,omitempty"`
-	MinimumSpend              float64             `json:"minimum_spend,omitempty"`
-	MinimumImpressions        int64               `json:"minimum_impressions,omitempty"`
-	Timezone                  string              `json:"timezone,omitempty"`
-	Metadata                  map[string]any      `json:"metadata,omitempty"`
+type SyncTrackerJobPayload struct{}
+
+// GuardCheckpoint is one rung of the spend ladder. When a campaign's lifetime
+// spend reaches Spend, every non-zero minimum below must already be met or the
+// campaign is paused. Clicks and impressions come from Facebook Insights;
+// tracker minimums come from Keitaro (leads are registrations, sales are
+// deposits).
+type GuardCheckpoint struct {
+	Spend             float64 `json:"spend"`
+	MinClicks         int64   `json:"min_clicks,omitempty"`
+	MinImpressions    int64   `json:"min_impressions,omitempty"`
+	MinTrackerClicks  int64   `json:"min_tracker_clicks,omitempty"`
+	MinTrackerLeads   float64 `json:"min_tracker_leads,omitempty"`
+	MinTrackerSales   float64 `json:"min_tracker_sales,omitempty"`
+	MinTrackerRevenue float64 `json:"min_tracker_revenue,omitempty"`
 }
 
-type UpdateRuleRequest = CreateRuleRequest
+type CreateGuardRequest struct {
+	ConnectionID              uuid.UUID          `json:"connection_id"`
+	BatchID                   *uuid.UUID         `json:"batch_id,omitempty"`
+	PublishedObjectID         *uuid.UUID         `json:"published_object_id,omitempty"`
+	Name                      string             `json:"name"`
+	Status                    domain.GuardStatus `json:"status,omitempty"`
+	Checkpoints               []GuardCheckpoint  `json:"checkpoints"`
+	EvaluationIntervalSeconds int64              `json:"evaluation_interval_seconds,omitempty"`
+}
+
+type UpdateGuardRequest struct {
+	Name                      string             `json:"name,omitempty"`
+	Status                    domain.GuardStatus `json:"status,omitempty"`
+	Checkpoints               []GuardCheckpoint  `json:"checkpoints"`
+	EvaluationIntervalSeconds int64              `json:"evaluation_interval_seconds,omitempty"`
+}
 
 type Capabilities struct {
 	MetaAPIVersion       string                   `json:"meta_api_version"`
@@ -117,10 +130,7 @@ type Capabilities struct {
 	BidStrategies        []meta.BidStrategy       `json:"bid_strategies"`
 	SpecialAdCategories  []meta.SpecialAdCategory `json:"special_ad_categories"`
 	CreativeFormats      []string                 `json:"creative_formats"`
-	RuleOperators        []rules.Operator         `json:"rule_operators"`
-	RuleActions          []rules.Action           `json:"rule_actions"`
-	RuleTargetLevels     []rules.TargetLevel      `json:"rule_target_levels"`
-	CommonRuleMetrics    []string                 `json:"common_rule_metrics"`
+	GuardMetrics         []string                 `json:"guard_metrics"`
 	RawFieldsSupported   bool                     `json:"raw_fields_supported"`
 	ExcludedCapabilities []string                 `json:"excluded_capabilities"`
 }

@@ -85,12 +85,14 @@ func (s RepositoryScheduleStore) activeRecurringJob(
 }
 
 func isRecurringJob(jobType string) bool {
-	return jobType == application.JobCollectInsights || jobType == application.JobEvaluateRules
+	return jobType == application.JobCollectInsights || jobType == application.JobEvaluateGuards
 }
 
 type SchedulerOptions struct {
 	InsightsInterval    time.Duration
-	RuleInterval        time.Duration
+	GuardInterval       time.Duration
+	TrackerInterval     time.Duration
+	TrackerEnabled      bool
 	MaintenanceInterval time.Duration
 	MaxAttempts         int
 	Now                 func() time.Time
@@ -109,8 +111,11 @@ func NewScheduler(store ScheduleStore, options SchedulerOptions) (*Scheduler, er
 	if options.InsightsInterval <= 0 {
 		return nil, errors.New("worker: insights interval must be positive")
 	}
-	if options.RuleInterval <= 0 {
-		return nil, errors.New("worker: rule interval must be positive")
+	if options.GuardInterval <= 0 {
+		return nil, errors.New("worker: guard interval must be positive")
+	}
+	if options.TrackerEnabled && options.TrackerInterval <= 0 {
+		return nil, errors.New("worker: tracker interval must be positive")
 	}
 	if options.MaintenanceInterval <= 0 {
 		options.MaintenanceInterval = time.Minute
@@ -136,10 +141,17 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	s.runInitialPass(ctx)
 
 	insightsTicker := time.NewTicker(s.options.InsightsInterval)
-	rulesTicker := time.NewTicker(s.options.RuleInterval)
+	guardsTicker := time.NewTicker(s.options.GuardInterval)
+	trackerInterval := s.options.TrackerInterval
+	if !s.options.TrackerEnabled {
+		// Keep the ticker alive but effectively silent when the tracker is off.
+		trackerInterval = 24 * time.Hour
+	}
+	trackerTicker := time.NewTicker(trackerInterval)
 	maintenanceTicker := time.NewTicker(s.options.MaintenanceInterval)
 	defer insightsTicker.Stop()
-	defer rulesTicker.Stop()
+	defer guardsTicker.Stop()
+	defer trackerTicker.Stop()
 	defer maintenanceTicker.Stop()
 
 	for {
@@ -150,9 +162,13 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			if err := s.ScheduleInsights(ctx, s.options.Now()); err != nil {
 				s.options.Logger.Error("schedule insights jobs", "error", err)
 			}
-		case <-rulesTicker.C:
-			if err := s.ScheduleRuleEvaluations(ctx, s.options.Now()); err != nil {
-				s.options.Logger.Error("schedule rule jobs", "error", err)
+		case <-guardsTicker.C:
+			if err := s.ScheduleGuardEvaluations(ctx, s.options.Now()); err != nil {
+				s.options.Logger.Error("schedule guard jobs", "error", err)
+			}
+		case <-trackerTicker.C:
+			if err := s.ScheduleTrackerSync(ctx, s.options.Now()); err != nil {
+				s.options.Logger.Error("schedule tracker sync", "error", err)
 			}
 		case <-maintenanceTicker.C:
 			if _, err := s.ExpireOAuthSessions(ctx, s.options.Now()); err != nil {
@@ -170,8 +186,11 @@ func (s *Scheduler) runInitialPass(ctx context.Context) {
 	if err := s.ScheduleInsights(ctx, now); err != nil && ctx.Err() == nil {
 		s.options.Logger.Error("initial insights scheduling", "error", err)
 	}
-	if err := s.ScheduleRuleEvaluations(ctx, now); err != nil && ctx.Err() == nil {
-		s.options.Logger.Error("initial rule scheduling", "error", err)
+	if err := s.ScheduleGuardEvaluations(ctx, now); err != nil && ctx.Err() == nil {
+		s.options.Logger.Error("initial guard scheduling", "error", err)
+	}
+	if err := s.ScheduleTrackerSync(ctx, now); err != nil && ctx.Err() == nil {
+		s.options.Logger.Error("initial tracker scheduling", "error", err)
 	}
 }
 
@@ -188,18 +207,36 @@ func (s *Scheduler) ScheduleInsights(ctx context.Context, now time.Time) error {
 	)
 }
 
-func (s *Scheduler) ScheduleRuleEvaluations(ctx context.Context, now time.Time) error {
+func (s *Scheduler) ScheduleGuardEvaluations(ctx context.Context, now time.Time) error {
 	return s.scheduleForActiveConnections(
 		ctx,
 		now,
-		application.JobEvaluateRules,
-		s.options.RuleInterval,
+		application.JobEvaluateGuards,
+		s.options.GuardInterval,
 		10,
 		func(connectionID uuid.UUID) domain.JSON {
 			id := connectionID
-			return domain.MustJSON(application.EvaluateRulesJobPayload{ConnectionID: &id})
+			return domain.MustJSON(application.EvaluateGuardsJobPayload{ConnectionID: &id})
 		},
 	)
+}
+
+// ScheduleTrackerSync enqueues one global Keitaro sync per interval bucket.
+func (s *Scheduler) ScheduleTrackerSync(ctx context.Context, now time.Time) error {
+	if !s.options.TrackerEnabled {
+		return nil
+	}
+	dedupeKey := "tracker:" + scheduleBucket(now, s.options.TrackerInterval)
+	_, _, err := s.store.Enqueue(ctx, &domain.Job{
+		Type:        application.JobSyncTracker,
+		Status:      domain.JobPending,
+		Priority:    5,
+		Payload:     domain.MustJSON(application.SyncTrackerJobPayload{}),
+		DedupeKey:   &dedupeKey,
+		MaxAttempts: s.options.MaxAttempts,
+		AvailableAt: now.UTC(),
+	})
+	return err
 }
 
 func (s *Scheduler) ExpireOAuthSessions(ctx context.Context, now time.Time) (int64, error) {

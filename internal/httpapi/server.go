@@ -3,8 +3,6 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,18 +36,16 @@ const (
 )
 
 type Config struct {
-	InternalToken []byte
-	Environment   string
-	OpenAPI       []byte
-	Ready         func(context.Context) error
-	Logger        *slog.Logger
-	BodyLimit     int
+	Environment string
+	OpenAPI     []byte
+	Ready       func(context.Context) error
+	Logger      *slog.Logger
+	BodyLimit   int
 }
 
 type Server struct {
 	App           *fiber.App
 	service       *application.Service
-	token         [sha256.Size]byte
 	openAPI       []byte
 	ready         func(context.Context) error
 	logger        *slog.Logger
@@ -72,9 +68,6 @@ func New(service *application.Service, cfg Config) (*Server, error) {
 	if service == nil || service.Repos == nil {
 		return nil, errors.New("httpapi: application service is required")
 	}
-	if len(cfg.InternalToken) == 0 {
-		return nil, errors.New("httpapi: internal API token is required")
-	}
 	if cfg.BodyLimit <= 0 {
 		cfg.BodyLimit = defaultBodyLimit
 	}
@@ -84,7 +77,6 @@ func New(service *application.Service, cfg Config) (*Server, error) {
 
 	server := &Server{
 		service:       service,
-		token:         sha256.Sum256(cfg.InternalToken),
 		openAPI:       append([]byte(nil), cfg.OpenAPI...),
 		ready:         cfg.Ready,
 		logger:        cfg.Logger,
@@ -131,45 +123,28 @@ func (s *Server) routes() {
 	s.App.Post("/auth/login", s.loginUser)
 	s.App.Post("/auth/register", s.registerUser)
 	s.App.Post("/auth/logout", s.requireUser, s.requireCSRF, s.logoutUser)
-	s.App.Get("/app", s.requireUser, s.appPage)
-	s.App.Get("/app/api/overview", s.requireUser, s.appOverview)
-	s.App.Get("/app/connect/meta", s.requireUser, s.startUserOAuthRedirect)
-	s.App.Post("/app/api/connections/:id/sync", s.requireUser, s.requireCSRF, s.syncUserConnection)
-	s.App.Post("/app/api/batches", s.requireUser, s.requireCSRF, s.createUserBatch)
-	s.App.Post("/app/api/rules", s.requireUser, s.requireCSRF, s.createUserRule)
-	s.App.Post("/app/api/rules/:id/enable", s.requireUser, s.requireCSRF, s.enableUserRule)
-	s.App.Post("/app/api/rules/:id/disable", s.requireUser, s.requireCSRF, s.disableUserRule)
-	s.App.Post("/app/api/media", s.requireUser, s.requireCSRF, s.createMedia)
 
-	v1 := s.App.Group("/v1", s.authenticate)
-	v1.Post("/oauth/sessions", s.startOAuth)
-	v1.Get("/connections", s.listConnections)
-	v1.Get("/connections/:id", s.getConnection)
-	v1.Delete("/connections/:id", s.revokeConnection)
-	v1.Post("/connections/:id/sync", s.syncConnection)
-	v1.Get("/ad-accounts", s.listAdAccounts)
-	v1.Get("/ad-accounts/:id/campaign-audit", s.auditAdAccount)
-	v1.Get("/assets", s.listAssets)
-	v1.Get("/assets/:id/posts", s.auditPagePosts)
-	v1.Post("/media", s.createMedia)
-	v1.Get("/media", s.listMedia)
-	v1.Get("/media/:id", s.getMedia)
-	v1.Post("/batches", s.createBatch)
-	v1.Get("/batches", s.listBatches)
-	v1.Get("/batches/:id", s.getBatch)
-	v1.Get("/batches/:id/results", s.listBatchResults)
-	v1.Get("/published-objects", s.listPublishedObjects)
-	v1.Post("/rules", s.createRule)
-	v1.Get("/rules", s.listRules)
-	v1.Get("/rules/:id", s.getRule)
-	v1.Patch("/rules/:id", s.updateRule)
-	v1.Post("/rules/:id/enable", s.enableRule)
-	v1.Post("/rules/:id/disable", s.disableRule)
-	v1.Get("/rules/:id/evaluations", s.listRuleEvaluations)
-	v1.Get("/insights", s.listInsights)
-	v1.Get("/jobs", s.listJobs)
-	v1.Get("/jobs/:id", s.getJob)
-	v1.Get("/capabilities", s.capabilities)
+	s.App.Get("/app", s.requireUser, s.dashboardPage)
+	s.App.Get("/app/launch", s.requireUser, s.launcherPage)
+	s.App.Get("/app/campaigns", s.requireUser, s.campaignsPage)
+	s.App.Get("/app/accounts/:id", s.requireUser, s.accountPage)
+	s.App.Get("/app/connect/meta", s.requireUser, s.startUserOAuthRedirect)
+
+	api := s.App.Group("/app/api", s.requireUser)
+	api.Get("/overview", s.appOverview)
+	api.Get("/launcher", s.launcherData)
+	api.Get("/campaigns", s.listUserCampaigns)
+	api.Get("/accounts/:id/stats", s.accountStats)
+	api.Get("/batches/:id", s.getUserBatch)
+	api.Get("/capabilities", s.userCapabilities)
+	api.Post("/connections/:id/sync", s.requireCSRF, s.syncUserConnection)
+	api.Delete("/connections/:id", s.requireCSRF, s.revokeUserConnection)
+	api.Post("/batches", s.requireCSRF, s.createUserBatch)
+	api.Patch("/guards/:id", s.requireCSRF, s.updateUserGuard)
+	api.Post("/campaigns/:id/guard", s.requireCSRF, s.createCampaignGuard)
+	api.Post("/campaigns/:id/pause", s.requireCSRF, s.pauseUserCampaign)
+	api.Post("/campaigns/:id/resume", s.requireCSRF, s.resumeUserCampaign)
+	api.Post("/media", s.requireCSRF, s.createMedia)
 }
 
 func (s *Server) requestID(c fiber.Ctx) error {
@@ -203,20 +178,6 @@ func isSafeRequestID(value string) bool {
 	return true
 }
 
-func (s *Server) authenticate(c fiber.Ctx) error {
-	header := strings.TrimSpace(c.Get("Authorization"))
-	scheme, credential, ok := strings.Cut(header, " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") {
-		return application.ErrUnauthorized
-	}
-	credential = strings.TrimSpace(credential)
-	provided := sha256.Sum256([]byte(credential))
-	if subtle.ConstantTimeCompare(provided[:], s.token[:]) != 1 {
-		return application.ErrUnauthorized
-	}
-	return c.Next()
-}
-
 func (s *Server) closeConnectionOnBodyError(c fiber.Ctx) error {
 	err := c.Next()
 	if err != nil && requestHasBody(c.Request()) {
@@ -246,8 +207,7 @@ func (s *Server) handleError(c fiber.Ctx, err error) error {
 		status, code, message = http.StatusBadRequest, "invalid_request", validation.Error()
 		details = map[string]any{"field": validation.Field}
 	case errors.Is(err, application.ErrUnauthorized):
-		status, code, message = http.StatusUnauthorized, "unauthorized", "valid bearer credentials are required"
-		c.Set("WWW-Authenticate", `Bearer realm="raze-posting"`)
+		status, code, message = http.StatusUnauthorized, "unauthorized", "sign in to continue"
 	case errors.Is(err, application.ErrInvalidCredentials):
 		status, code, message = http.StatusUnauthorized, "invalid_credentials", "invalid login or password"
 	case errors.Is(err, application.ErrSessionExpired):

@@ -175,3 +175,18 @@ func (r *InsightRepository) DeleteBefore(ctx context.Context, before time.Time, 
 		)`, before, limit)
 	return result.RowsAffected, result.Error
 }
+
+// LatestForObjects returns the newest snapshot per published object.
+func (r *InsightRepository) LatestForObjects(ctx context.Context, objectIDs []uuid.UUID) ([]domain.InsightSnapshot, error) {
+	if len(objectIDs) == 0 {
+		return nil, nil
+	}
+	var snapshots []domain.InsightSnapshot
+	err := r.db.WithContext(ctx).
+		Raw(`SELECT DISTINCT ON (published_object_id) *
+		     FROM insight_snapshots
+		     WHERE published_object_id IN ?
+		     ORDER BY published_object_id, window_end DESC, id DESC`, objectIDs).
+		Scan(&snapshots).Error
+	return snapshots, err
+}

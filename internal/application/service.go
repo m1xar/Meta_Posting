@@ -29,6 +29,7 @@ type Service struct {
 	Publisher meta.Publisher
 	Cipher    platformcrypto.TokenCipher
 	Storage   *storage.Local
+	Tracker   TrackerClient
 	Now       func() time.Time
 	Random    io.Reader
 }
