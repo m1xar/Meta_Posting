@@ -50,6 +50,13 @@ type ClientConfig struct {
 	UserAgent        string
 	Sleep            func(context.Context, time.Duration) error
 
+	// Governor, when set, is consulted before every request and observes
+	// every response. Optional: a nil Governor disables throttling entirely,
+	// which is what the tests and one-shot tooling want.
+	Governor Governor
+	// Now is injectable so throttling decisions are testable.
+	Now func() time.Time
+
 	// VideoProcessingTimeout bounds WaitForVideoReady even when its caller
 	// supplies a context without a deadline. Poll delays grow exponentially
 	// from VideoPollBaseDelay up to VideoPollMaxDelay.
@@ -73,6 +80,8 @@ type Client struct {
 	maxResponseSize  int64
 	userAgent        string
 	sleep            func(context.Context, time.Duration) error
+	governor         Governor
+	now              func() time.Time
 
 	videoProcessingTimeout time.Duration
 	videoPollBaseDelay     time.Duration
@@ -154,6 +163,9 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if cfg.Sleep == nil {
 		cfg.Sleep = sleepContext
 	}
+	if cfg.Now == nil {
+		cfg.Now = func() time.Time { return time.Now().UTC() }
+	}
 	if cfg.VideoProcessingTimeout <= 0 {
 		cfg.VideoProcessingTimeout = defaultVideoProcessingTimeout
 	}
@@ -181,6 +193,8 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		maxResponseSize:  cfg.MaxResponseSize,
 		userAgent:        cfg.UserAgent,
 		sleep:            cfg.Sleep,
+		governor:         cfg.Governor,
+		now:              cfg.Now,
 
 		videoProcessingTimeout: cfg.VideoProcessingTimeout,
 		videoPollBaseDelay:     cfg.VideoPollBaseDelay,
@@ -389,6 +403,17 @@ func (c *Client) doWithClientRetries(
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", c.userAgent)
 
+		// Every Graph call in this service funnels through here, including
+		// paged follow-ups, so this single pair of hooks covers publishing,
+		// discovery, media and insights alike.
+		governorKey := ""
+		if c.governor != nil {
+			governorKey = GovernorKey(req.URL.Path)
+			if err := c.governor.Wait(ctx, governorKey, c.now()); err != nil {
+				return ResponseMeta{}, err
+			}
+		}
+
 		resp, err := httpClient.Do(req)
 		if err != nil {
 			inlineRetryable := retryableTransportError(err)
@@ -409,6 +434,9 @@ func (c *Client) doWithClientRetries(
 		}
 
 		meta := responseMetadata(resp)
+		if c.governor != nil {
+			c.governor.Observe(governorKey, meta, c.now())
+		}
 		body, readErr := readResponseBody(resp.Body, c.maxResponseSize)
 		_ = resp.Body.Close()
 		if readErr != nil {

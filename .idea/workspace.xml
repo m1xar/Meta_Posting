@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="850d3e5c-0df0-4b8e-88eb-016331640443" name="Changes" comment="">
+      <change beforePath="$PROJECT_DIR$/.dockerignore" beforeDir="false" afterPath="$PROJECT_DIR$/.dockerignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmd/api/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/api/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/api-guide.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/api-guide.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/application/campaign_audit.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/application/campaign_audit.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/application/oauth.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/application/oauth.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/application/sync.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/application/sync.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/application/sync_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/application/sync_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/config/config.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/domain/models.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/domain/models.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/httpapi/resources.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/httpapi/resources.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/httpapi/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/httpapi/server.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/httpapi/server_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/httpapi/server_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/meta/campaign_audit.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/campaign_audit.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/meta/client.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/client.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/meta/client_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/client_test.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/meta/discovery.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/discovery.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/meta/oauth.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/oauth.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/platform/database/meta_repository.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/platform/database/meta_repository.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/platform/database/repositories.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/platform/database/repositories.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/openapi/openapi.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/openapi/openapi.yaml" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="116" />
+    <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
+  </component>
+  <component name="GOROOT" url="file:///usr/local/go" />
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="2.2035936620969894" />
+      <entry key="MS500" value="6.2483066461891035" />
+      <entry key="S2" value="14.262456533462366" />
+      <entry key="S5" value="20.722257684525513" />
+      <entry key="S10" value="24.270289152056154" />
+      <entry key="S30" value="27.26538565427597" />
+      <entry key="S60" value="28.11095683278333" />
+      <entry key="M2" value="28.549882411022764" />
+      <entry key="M5" value="28.81858857631137" />
+      <entry key="M10" value="28.90906508515695" />
+      <entry key="M15" value="28.939325654793674" />
+      <entry key="M30" value="28.96963725932237" />
+      <entry key="H1" value="28.984812231305437" />
+      <entry key="H2" value="28.992404515270874" />
+      <entry key="H4" value="28.996201857440834" />
+      <entry key="D1" value="28.999366920649123" />
+      <entry key="W1" value="28.999909558731222" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="2.1239586211713624" />
+      <entry key="MS500" value="6.199919558584586" />
+      <entry key="S2" value="14.225654388082097" />
+      <entry key="S5" value="20.695283593549423" />
+      <entry key="S10" value="24.25288141363115" />
+      <entry key="S30" value="27.258402830517362" />
+      <entry key="S60" value="28.10729327822762" />
+      <entry key="M2" value="28.548005509546915" />
+      <entry key="M5" value="28.817826707322013" />
+      <entry key="M10" value="28.908682275561002" />
+      <entry key="M15" value="28.93907002993395" />
+      <entry key="M30" value="28.96950923721626" />
+      <entry key="H1" value="28.98474816774972" />
+      <entry key="H2" value="28.99237247035689" />
+      <entry key="H4" value="28.996185831698494" />
+      <entry key="D1" value="28.99936424923567" />
+      <entry key="W1" value="28.999909177089556" />
+    </decayedShown>
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 4,
+  "fromUser": false
+}]]></component>
+  <component name="ProjectId" id="3IRmd7cLANWYe7Xtrhyy3PlSrYX" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.GoLinterPluginOnboardingV2": "true",
+    "RunOnceActivity.GoLinterPluginStorageMigration": "true",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.go.analysis.ui.options.defaults": "true",
+    "RunOnceActivity.go.formatter.settings.were.checked": "true",
+    "RunOnceActivity.go.modules.go.list.on.any.changes.was.set": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
+    "git-widget-placeholder": "main",
+    "go.sdk.automatically.set": "true",
+    "junie.onboarding.icon.badge.shown": "true",
+    "last_opened_file_path": "/Users/mike/Meta Posting",
+    "node.js.detected.package.eslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "to.speed.mode.migration.done": "true"
+  }
+}]]></component>
+  <component name="RunManager" selected="Go Build.go build github.com/watchers-factory/raze-posting/cmd/api">
+    <configuration name="go build github.com/watchers-factory/raze-posting/cmd/api" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+      <module name="Meta Posting" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="github.com/watchers-factory/raze-posting/cmd/api" />
+      <directory value="$PROJECT_DIR$" />
+      <auto_managed_config_id value="$PROJECT_DIR$/cmd/api" />
+      <method v="2" />
+    </configuration>
+    <configuration name="go build github.com/watchers-factory/raze-posting/cmd/worker" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+      <module name="Meta Posting" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="github.com/watchers-factory/raze-posting/cmd/worker" />
+      <directory value="$PROJECT_DIR$" />
+      <auto_managed_config_id value="$PROJECT_DIR$/cmd/worker" />
+      <method v="2" />
+    </configuration>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-gosdk-72a9cf600ed8-3dd3895e5e08-org.jetbrains.plugins.go.sharedIndexes.bundled-GO-261.26222.72" />
+        <option value="bundled-js-predefined-d6986cc7102b-31caf2ab9e3c-JavaScript-GO-261.26222.72" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="850d3e5c-0df0-4b8e-88eb-016331640443" name="Changes" comment="" />
+      <created>1787735839914</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1787735839914</updated>
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>

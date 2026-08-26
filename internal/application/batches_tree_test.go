@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/meta"
 )
 
 func TestCampaignTreeOverrideMarkerAndMediaPointer(t *testing.T) {
@@ -26,7 +26,7 @@ func TestCampaignTreeOverrideMarkerAndMediaPointer(t *testing.T) {
 		"campaign":{"daily_budget":2500},
 		"ad_sets":[{"ad_set":{"name":"Override set","targeting":{"geo_locations":{"countries":["PK"]}}},"ads":[{"creative":{"name":"Override creative","object_story_spec":{"page_id":"page","link_data":{"link":"https://example.com"}}},"ad":{"name":"Override ad"}}]}]
 	}`)
-	merged, err := campaignTreeForAccount(tree, override)
+	merged, err := specForAccount(tree, override)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestCampaignTreeOverrideMarkerAndMediaPointer(t *testing.T) {
 		merged.AdSets[0].Ads[0].Creative.Name != "Override creative" {
 		t.Fatalf("merged tree = %#v", merged)
 	}
-	if err := setCampaignTreeJSONPointer(
+	if err := setSpecJSONPointer(
 		&merged,
 		"/ad_sets/0/ads/0/creative/object_story_spec/link_data/image_hash",
 		"hash-1",

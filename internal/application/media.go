@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
 	"gorm.io/gorm"
 )
 

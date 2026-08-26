@@ -7,6 +7,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var LegacyUserID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
 type Model struct {
 	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	CreatedAt time.Time `gorm:"not null" json:"created_at"`
@@ -16,12 +18,29 @@ type Model struct {
 // User is the tenant boundary for every operator-visible resource. A Meta
 // identity may be connected by more than one User without sharing inventory,
 // batches, media, insights, or rules between them.
+// UserRole gates cross-tenant access. It is deliberately a small closed set:
+// anything finer belongs in per-resource ownership, not in a role.
+type UserRole string
+
+const (
+	RoleUser  UserRole = "user"
+	RoleAdmin UserRole = "admin"
+	// RoleDisabled cannot authenticate. It holds the legacy pre-multi-tenant
+	// tenant, whose resources an operator may migrate explicitly.
+	RoleDisabled UserRole = "disabled"
+)
+
 type User struct {
 	Model
-	Login        string     `gorm:"not null" json:"login"`
+	Email        string     `gorm:"not null" json:"email"`
+	Username     string     `gorm:"not null" json:"username"`
+	Role         UserRole   `gorm:"type:text;not null;default:'user'" json:"role"`
 	PasswordHash string     `gorm:"not null" json:"-"`
 	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
 }
+
+func (u User) IsAdmin() bool  { return u.Role == RoleAdmin }
+func (u User) CanLogin() bool { return u.Role == RoleUser || u.Role == RoleAdmin }
 
 func (User) TableName() string { return "users" }
 
@@ -115,9 +134,16 @@ type AdAccount struct {
 	Balance           int64      `gorm:"not null;default:0" json:"balance_minor"`
 	SpendCap          int64      `gorm:"not null;default:0" json:"spend_cap_minor"`
 	Capabilities      JSON       `gorm:"type:jsonb;not null;default:'[]'" json:"capabilities"`
-	IsActive          bool       `gorm:"not null;default:true" json:"is_active"`
-	RawJSON           JSON       `gorm:"type:jsonb;not null;default:'{}'" json:"raw"`
-	LastSyncedAt      time.Time  `gorm:"not null" json:"last_synced_at"`
+	UserTasks         JSON       `gorm:"type:jsonb;not null;default:'[]'" json:"user_tasks"`
+	// FundingSource is empty when no payment instrument is attached, which is
+	// the only reliable signal that an account cannot be launched into.
+	// Balance is the amount due, not funds available.
+	FundingSource        string    `gorm:"not null;default:''" json:"funding_source,omitempty"`
+	FundingSourceDetails JSON      `gorm:"type:jsonb;not null;default:'{}'" json:"funding_source_details"`
+	IsPrepayAccount      bool      `gorm:"not null;default:false" json:"is_prepay_account"`
+	IsActive             bool      `gorm:"not null;default:true" json:"is_active"`
+	RawJSON              JSON      `gorm:"type:jsonb;not null;default:'{}'" json:"raw"`
+	LastSyncedAt         time.Time `gorm:"not null" json:"last_synced_at"`
 }
 
 func (AdAccount) TableName() string { return "ad_accounts" }
@@ -305,66 +331,47 @@ type InsightSnapshot struct {
 
 func (InsightSnapshot) TableName() string { return "insight_snapshots" }
 
-// CampaignGuard is the spend-checkpoint ladder that replaces free-form
-// automation rules. Every guarded campaign is re-checked when its lifetime
-// spend crosses the next checkpoint; a checkpoint whose thresholds are not met
-// pauses the campaign. A guard scoped to a single published campaign takes
-// precedence over its batch-wide guard.
-type CampaignGuard struct {
+type AutomationRule struct {
 	Model
-	ConnectionID              uuid.UUID   `gorm:"type:uuid;not null" json:"connection_id"`
-	BatchID                   *uuid.UUID  `gorm:"type:uuid" json:"batch_id,omitempty"`
-	PublishedObjectID         *uuid.UUID  `gorm:"type:uuid" json:"published_object_id,omitempty"`
-	Name                      string      `gorm:"not null" json:"name"`
-	Status                    GuardStatus `gorm:"type:text;not null" json:"status"`
-	Checkpoints               JSON        `gorm:"type:jsonb;not null;default:'[]'" json:"checkpoints"`
-	EvaluationIntervalSeconds int64       `gorm:"not null" json:"evaluation_interval_seconds"`
-	NextEvaluationAt          time.Time   `gorm:"not null" json:"next_evaluation_at"`
-	LastEvaluatedAt           *time.Time  `json:"last_evaluated_at,omitempty"`
+	ConnectionID              uuid.UUID    `gorm:"type:uuid;not null" json:"connection_id"`
+	AdAccountID               *uuid.UUID   `gorm:"type:uuid" json:"ad_account_id,omitempty"`
+	BatchID                   *uuid.UUID   `gorm:"type:uuid" json:"batch_id,omitempty"`
+	Name                      string       `gorm:"not null" json:"name"`
+	Status                    RuleStatus   `gorm:"type:text;not null" json:"status"`
+	ScopeLevel                InsightLevel `gorm:"type:text;not null" json:"scope_level"`
+	Action                    RuleAction   `gorm:"type:text;not null" json:"action"`
+	Conditions                JSON         `gorm:"type:jsonb;not null;default:'{}'" json:"conditions"`
+	LookbackSeconds           int64        `gorm:"not null" json:"lookback_seconds"`
+	EvaluationIntervalSeconds int64        `gorm:"not null" json:"evaluation_interval_seconds"`
+	GracePeriodSeconds        int64        `gorm:"not null;default:0" json:"grace_period_seconds"`
+	MinimumSpend              float64      `gorm:"type:numeric(24,8);not null;default:0" json:"minimum_spend"`
+	MinimumImpressions        int64        `gorm:"not null;default:0" json:"minimum_impressions"`
+	Timezone                  string       `gorm:"not null;default:''" json:"timezone"`
+	NextEvaluationAt          time.Time    `gorm:"not null" json:"next_evaluation_at"`
+	LastEvaluatedAt           *time.Time   `json:"last_evaluated_at,omitempty"`
+	LastTriggeredAt           *time.Time   `json:"last_triggered_at,omitempty"`
+	Metadata                  JSON         `gorm:"type:jsonb;not null;default:'{}'" json:"metadata"`
 }
 
-func (CampaignGuard) TableName() string { return "campaign_guards" }
+func (AutomationRule) TableName() string { return "automation_rules" }
 
-// GuardCheck is the durable outcome of one checkpoint for one campaign. At
-// most one row exists per (guard, campaign, checkpoint index); an operator can
-// override a failed check to let the campaign continue to the next checkpoint.
-type GuardCheck struct {
+type RuleEvaluation struct {
 	Model
-	GuardID           uuid.UUID        `gorm:"type:uuid;not null" json:"guard_id"`
-	PublishedObjectID uuid.UUID        `gorm:"type:uuid;not null" json:"published_object_id"`
-	MetaObjectID      string           `gorm:"not null" json:"meta_object_id"`
-	CheckpointIndex   int              `gorm:"not null" json:"checkpoint_index"`
-	CheckpointSpend   float64          `gorm:"type:numeric(24,8);not null" json:"checkpoint_spend"`
-	Status            GuardCheckStatus `gorm:"type:text;not null" json:"status"`
-	Observed          JSON             `gorm:"type:jsonb;not null;default:'{}'" json:"observed"`
-	Thresholds        JSON             `gorm:"type:jsonb;not null;default:'{}'" json:"thresholds"`
-	Paused            bool             `gorm:"not null;default:false" json:"paused"`
-	Error             string           `gorm:"not null;default:''" json:"error,omitempty"`
-	EvaluatedAt       time.Time        `gorm:"not null" json:"evaluated_at"`
+	RuleID            uuid.UUID            `gorm:"type:uuid;not null" json:"rule_id"`
+	PublishedObjectID *uuid.UUID           `gorm:"type:uuid" json:"published_object_id,omitempty"`
+	MetaObjectID      string               `gorm:"not null;default:''" json:"meta_object_id"`
+	Status            RuleEvaluationStatus `gorm:"type:text;not null" json:"status"`
+	WindowStart       time.Time            `gorm:"not null" json:"window_start"`
+	WindowEnd         time.Time            `gorm:"not null" json:"window_end"`
+	ObservedMetrics   JSON                 `gorm:"type:jsonb;not null;default:'{}'" json:"observed_metrics"`
+	ConditionResults  JSON                 `gorm:"type:jsonb;not null;default:'{}'" json:"condition_results"`
+	ActionAttempted   bool                 `gorm:"not null;default:false" json:"action_attempted"`
+	ActionResponse    JSON                 `gorm:"type:jsonb;not null;default:'{}'" json:"action_response"`
+	Error             string               `gorm:"not null;default:''" json:"error,omitempty"`
+	EvaluatedAt       time.Time            `gorm:"not null" json:"evaluated_at"`
 }
 
-func (GuardCheck) TableName() string { return "guard_checks" }
-
-// TrackerStat is the latest Keitaro roll-up for one Facebook campaign.
-// Rows are matched by campaign ID (sub_id_7) first and campaign name
-// (sub_id_3) otherwise. Leads are tracker registrations and sales are
-// deposits.
-type TrackerStat struct {
-	Model
-	ConnectionID      *uuid.UUID `gorm:"type:uuid" json:"connection_id,omitempty"`
-	PublishedObjectID *uuid.UUID `gorm:"type:uuid" json:"published_object_id,omitempty"`
-	MetaCampaignID    string     `gorm:"not null;default:''" json:"meta_campaign_id"`
-	CampaignName      string     `gorm:"not null;default:''" json:"campaign_name"`
-	Clicks            int64      `gorm:"not null;default:0" json:"clicks"`
-	UniqueClicks      int64      `gorm:"not null;default:0" json:"unique_clicks"`
-	Leads             float64    `gorm:"type:numeric(24,8);not null;default:0" json:"leads"`
-	Sales             float64    `gorm:"type:numeric(24,8);not null;default:0" json:"sales"`
-	Revenue           float64    `gorm:"type:numeric(24,8);not null;default:0" json:"revenue"`
-	Raw               JSON       `gorm:"type:jsonb;not null;default:'{}'" json:"raw"`
-	LastSyncedAt      time.Time  `gorm:"not null" json:"last_synced_at"`
-}
-
-func (TrackerStat) TableName() string { return "tracker_stats" }
+func (RuleEvaluation) TableName() string { return "rule_evaluations" }
 
 type AuditEvent struct {
 	ID           uuid.UUID     `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
@@ -391,3 +398,35 @@ func (a *AuditEvent) BeforeCreate(_ *gorm.DB) error {
 	}
 	return nil
 }
+
+// APIKey is a per-user bearer credential. Only the SHA-256 hash is stored,
+// matching UserSession: a database disclosure must not yield usable
+// credentials.
+type APIKey struct {
+	Model
+	UserID     uuid.UUID  `gorm:"type:uuid;not null" json:"user_id"`
+	Name       string     `gorm:"not null;default:''" json:"name"`
+	TokenHash  []byte     `gorm:"not null" json:"-"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+}
+
+func (APIKey) TableName() string { return "api_keys" }
+
+// RuleMirror pairs one of this service's rules with the copy registered in
+// Meta's own automated-rules library.
+//
+// The copy is a backstop: it evaluates on Meta's schedule, far slower than
+// this service's own loop, but it survives this service being down. Recording
+// the pair is what lets a disabled rule take its mirror with it.
+type RuleMirror struct {
+	Model
+	RuleID      uuid.UUID `gorm:"type:uuid;not null" json:"rule_id"`
+	AdAccountID uuid.UUID `gorm:"type:uuid;not null" json:"ad_account_id"`
+	MetaRuleID  string    `gorm:"not null" json:"meta_rule_id"`
+	Status      string    `gorm:"not null;default:'active'" json:"status"`
+	LastError   string    `gorm:"not null;default:''" json:"last_error,omitempty"`
+}
+
+func (RuleMirror) TableName() string { return "rule_mirrors" }

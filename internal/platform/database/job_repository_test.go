@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/watchers-factory/raze-posting/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/domain"
 )
 
 func TestDeadPublishAccountResultID(t *testing.T) {

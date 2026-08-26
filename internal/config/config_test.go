@@ -9,6 +9,7 @@ import (
 func TestMetaUploadTimeoutConfiguration(t *testing.T) {
 	key := make([]byte, 32)
 	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("INTERNAL_API_TOKEN", "internal-token")
 	t.Setenv("TOKEN_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(key))
 	t.Setenv("META_APP_ID", "app-id")
 	t.Setenv("META_APP_SECRET", "app-secret")
@@ -43,6 +44,7 @@ func TestMetaUploadTimeoutConfiguration(t *testing.T) {
 func TestConfigurationRejectsMalformedOrNonPositiveRuntimeValues(t *testing.T) {
 	key := make([]byte, 32)
 	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("INTERNAL_API_TOKEN", "internal-token")
 	t.Setenv("TOKEN_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(key))
 	t.Setenv("META_APP_ID", "app-id")
 	t.Setenv("META_APP_SECRET", "app-secret")

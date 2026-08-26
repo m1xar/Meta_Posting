@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/config"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	platformcrypto "github.com/watchers-factory/raze-posting/internal/platform/crypto"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
-	"github.com/watchers-factory/raze-posting/internal/storage"
+	"github.com/watchers-factory/raze-ads/internal/config"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	platformcrypto "github.com/watchers-factory/raze-ads/internal/platform/crypto"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/storage"
 )
 
 var (
@@ -29,7 +29,6 @@ type Service struct {
 	Publisher meta.Publisher
 	Cipher    platformcrypto.TokenCipher
 	Storage   *storage.Local
-	Tracker   TrackerClient
 	Now       func() time.Time
 	Random    io.Reader
 }
@@ -209,6 +208,12 @@ func emptyObject() domain.JSON {
 
 func emptyArray() domain.JSON {
 	return append(domain.JSON(nil), domain.EmptyJSONArray...)
+}
+
+// Audit records an event from outside the application package, such as an
+// HTTP handler recording a cross-tenant read.
+func (s *Service) Audit(ctx context.Context, event domain.AuditEvent) {
+	s.audit(ctx, event)
 }
 
 func (s *Service) audit(ctx context.Context, event domain.AuditEvent) {

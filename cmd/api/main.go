@@ -12,13 +12,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/watchers-factory/raze-posting/internal/application"
-	"github.com/watchers-factory/raze-posting/internal/config"
-	"github.com/watchers-factory/raze-posting/internal/httpapi"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	platformcrypto "github.com/watchers-factory/raze-posting/internal/platform/crypto"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
-	"github.com/watchers-factory/raze-posting/internal/storage"
+	// Ship the timezone database in the binary. Insights dates are resolved in
+	// each ad account's timezone, and a container without tzdata would make
+	// time.LoadLocation fail into UTC silently.
+	_ "time/tzdata"
+
+	"github.com/watchers-factory/raze-ads/internal/application"
+	"github.com/watchers-factory/raze-ads/internal/config"
+	"github.com/watchers-factory/raze-ads/internal/httpapi"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	platformcrypto "github.com/watchers-factory/raze-ads/internal/platform/crypto"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/storage"
 )
 
 const maxUploadBytes = int64(1 << 30)
@@ -87,11 +92,13 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	server, err := httpapi.New(service, httpapi.Config{
-		Environment: cfg.Environment,
-		OpenAPI:     openAPI,
-		Logger:      logger,
-		BodyLimit:   int(maxUploadBytes + (8 << 20)),
-		Ready:       sqlDB.PingContext,
+		InternalToken:            []byte(cfg.InternalAPIToken),
+		Environment:              cfg.Environment,
+		AllowLegacyInternalToken: cfg.AllowLegacyInternalToken,
+		OpenAPI:                  openAPI,
+		Logger:                   logger,
+		BodyLimit:                int(maxUploadBytes + (8 << 20)),
+		Ready:                    sqlDB.PingContext,
 	})
 	if err != nil {
 		return err

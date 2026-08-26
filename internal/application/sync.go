@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
 )
 
 func (s *Service) EnqueueConnectionSync(ctx context.Context, connectionID uuid.UUID, dedupeSuffix string) (*domain.Job, error) {
@@ -105,10 +105,16 @@ func (s *Service) SyncConnection(ctx context.Context, connectionID uuid.UUID) (s
 			AmountSpent:       parseMinorAmount(source.AmountSpent),
 			Balance:           parseMinorAmount(source.Balance),
 			SpendCap:          parseMinorAmount(source.SpendCap),
-			Capabilities:      domain.MustJSON(source.Capabilities),
-			IsActive:          true,
-			RawJSON:           domain.MustJSON(source),
-			LastSyncedAt:      now,
+			UserTasks:         domain.MustJSON(source.UserTasks),
+			FundingSource:     source.FundingSource,
+			FundingSourceDetails: domain.MustJSON(
+				firstNonNilMap(source.FundingSourceDetails, map[string]any{}),
+			),
+			IsPrepayAccount: source.IsPrepayAccount,
+			Capabilities:    domain.MustJSON(source.Capabilities),
+			IsActive:        true,
+			RawJSON:         domain.MustJSON(source),
+			LastSyncedAt:    now,
 		}
 		if source.Business != nil {
 			record.BusinessName = source.Business.Name
@@ -232,6 +238,24 @@ func (s *Service) SyncConnection(ctx context.Context, connectionID uuid.UUID) (s
 	if err := s.Repos.MetaConnections.MarkSynced(ctx, connectionID, now); err != nil {
 		return summary, err
 	}
+
+	// Seed tracking for whatever the discovery just found. Failing to seed
+	// must not fail the sync itself: the connection and its inventory are
+	// already stored, and the scheduler will pick the accounts up on its next
+	// pass regardless. The backfill enqueue is what would otherwise be missed,
+	// so it is reported rather than silently dropped.
+	if err := s.seedAccountTracking(ctx, connectionID, now); err != nil {
+		s.audit(ctx, domain.AuditEvent{
+			ConnectionID: &connectionID,
+			ActorType:    "worker",
+			Action:       "insights.seed_failed",
+			EntityType:   "meta_connection",
+			EntityID:     connectionID.String(),
+			Severity:     domain.AuditWarning,
+			Metadata:     domain.MustJSON(map[string]string{"error": truncateError(err)}),
+		})
+	}
+
 	after, _ := jsonValue(summary)
 	severity := domain.AuditInfo
 	if len(summary.Failures) > 0 {
@@ -447,4 +471,11 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstNonNilMap(value, fallback map[string]any) map[string]any {
+	if value != nil {
+		return value
+	}
+	return fallback
 }

@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/watchers-factory/raze-posting/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/domain"
 )
 
 func TestTenantAllowsDuplicateMetaIdentityWithoutVisibilityLeak(t *testing.T) {
@@ -22,8 +22,16 @@ func TestTenantAllowsDuplicateMetaIdentityWithoutVisibilityLeak(t *testing.T) {
 	require.NoError(t, RunMigrations(ctx, db, "../../../migrations"))
 
 	repositories := NewRepositories(db)
-	first := &domain.User{Login: "tenant-" + uuid.NewString(), PasswordHash: "disabled"}
-	second := &domain.User{Login: "tenant-" + uuid.NewString(), PasswordHash: "disabled"}
+	firstName := "tenant-" + uuid.NewString()[:8]
+	secondName := "tenant-" + uuid.NewString()[:8]
+	first := &domain.User{
+		Username: firstName, Email: firstName + "@example.test",
+		Role: domain.RoleUser, PasswordHash: "disabled",
+	}
+	second := &domain.User{
+		Username: secondName, Email: secondName + "@example.test",
+		Role: domain.RoleUser, PasswordHash: "disabled",
+	}
 	require.NoError(t, repositories.Users.Create(ctx, first))
 	require.NoError(t, repositories.Users.Create(ctx, second))
 	t.Cleanup(func() {
@@ -32,7 +40,7 @@ func TestTenantAllowsDuplicateMetaIdentityWithoutVisibilityLeak(t *testing.T) {
 
 	for _, user := range []*domain.User{first, second} {
 		connection := &domain.MetaConnection{
-			UserID: user.ID, MetaUserID: "same-meta-user", DisplayName: user.Login,
+			UserID: user.ID, MetaUserID: "same-meta-user", DisplayName: user.Username,
 			Status: domain.MetaConnectionActive, AccessTokenCiphertext: make([]byte, 17),
 			AccessTokenNonce: make([]byte, 12), GrantedScopes: domain.EmptyJSONArray,
 			DeclinedScopes: domain.EmptyJSONArray, Metadata: domain.EmptyJSONObject,

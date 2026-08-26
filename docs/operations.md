@@ -5,8 +5,8 @@
 Raze Posting runs as three long-lived Docker Compose services plus one
 one-shot initializer:
 
-- `api`: session-authenticated workspace and JSON API plus the public OAuth callback;
-- `worker`: claims asynchronous jobs, evaluates campaign guards, and syncs Keitaro tracker statistics;
+- `api`: internal bearer-authenticated HTTP API plus the public OAuth callback;
+- `worker`: claims asynchronous jobs and evaluates scheduled rules;
 - `postgres`: PostgreSQL 18;
 - `uploads-init`: prepares bind-mount ownership, then exits successfully.
 
@@ -43,14 +43,13 @@ values:
 | `DATABASE_URL` | PostgreSQL DSN used by API and worker; its password must match `POSTGRES_PASSWORD` (percent-encode it in the URL when needed) |
 | `POSTGRES_PASSWORD` | database container password; use the same value in `DATABASE_URL` |
 | `HOST_HTTP_PORT` | loopback host port published by Compose (default `8080`) |
+| `INTERNAL_API_TOKEN` | administrator bearer token |
 | `TOKEN_ENCRYPTION_KEY` | base64-encoded 32-byte key for Meta tokens |
 | `META_APP_ID` | Raze Meta app ID |
 | `META_APP_SECRET` | Raze Meta app secret |
 | `META_OAUTH_REDIRECT_URI` | exact callback registered in Meta |
 | `META_LOGIN_CONFIG_ID` | Facebook Login for Business configuration |
 | `WORKER_CONCURRENCY` | maximum number of jobs processed concurrently |
-| `KEITARO_BASE_URL` | Keitaro tracker origin (empty disables tracker sync) |
-| `KEITARO_API_KEY` | Keitaro Admin API key |
 
 Default requested permissions are:
 
@@ -117,8 +116,16 @@ curl --fail http://127.0.0.1:8080/readyz
 curl --fail https://api.terahash.win/readyz
 ```
 
-Authenticated check: sign in at `https://api.terahash.win/login` and confirm
-the dashboard loads and `GET /app/api/overview` returns data for your user.
+Authenticated check:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer $INTERNAL_API_TOKEN" \
+  https://api.terahash.win/v1/connections
+```
+
+Never put token values directly into shell history on a shared host. Load them
+from a protected environment or secret store.
 
 ## Migrations
 
@@ -144,16 +151,14 @@ traffic readiness. Operational monitoring should additionally watch:
 - connection `last_error`, token expiry, and last sync age;
 - batches in `running` for unexpectedly long periods;
 - Meta throttling and permission errors;
-- guard evaluation lag and campaigns paused by guards;
-- Keitaro tracker sync failures (job type `sync_tracker`).
+- scheduled-rule evaluation lag.
 
 The normal worker execution settings are controlled by:
 
 - `WORKER_CONCURRENCY`;
 - `WORKER_POLL_INTERVAL`;
 - `INSIGHTS_POLL_INTERVAL`;
-- `GUARD_EVALUATION_INTERVAL`;
-- `KEITARO_POLL_INTERVAL`;
+- `RULE_EVALUATION_INTERVAL`;
 - `JOB_LEASE_DURATION`;
 - `JOB_MAX_ATTEMPTS`.
 
@@ -164,7 +169,7 @@ checkpointing; operators should use `docker compose stop` rather than killing
 containers directly.
 
 The supplied Nginx configuration applies a 16 MiB body limit by default and
-raises it to `1032m` only on exact `POST /app/api/media`: the 1 GiB application file
+raises it to `1032m` only on exact `POST /v1/media`: the 1 GiB application file
 limit plus the API's 8 MiB multipart-envelope allowance. Request buffering is
 disabled only for that media route, preventing Nginx from first copying the
 full upload to its temporary directory. Keep the upstream on HTTP/1.1 and
@@ -178,13 +183,13 @@ retry an HTTP `429` with backoff. If many trusted operators share one NAT
 address, adjust the values deliberately while retaining both controls.
 
 At the API layer, Fiber streams request bodies and defers multipart parsing
-until after session authentication. Only one byte of a fixed-length request is
+until after bearer authentication. Only one byte of a fixed-length request is
 prefetched before middleware runs; chunked bodies are routed from their
 headers. Authenticated multipart parsing remains bounded by `1032m`, and JSON
 parsing is separately bounded at 16 MiB. Do not disable
 `StreamRequestBody` or enable Fiber's automatic multipart pre-parser: either
 change would allow an unauthenticated sender to consume the upload budget
-before the session check.
+before the bearer check.
 
 The exact OAuth callback location has access logging disabled because its query
 string contains a short-lived authorization code and opaque state; preserve
@@ -205,8 +210,8 @@ their files cannot publish those creatives.
 
 ## Security
 
-- Operator sessions are HttpOnly cookies with CSRF tokens; serve the workspace
-  over TLS only.
+- Restrict the API to trusted callers and rotate the internal bearer token after
+  suspected exposure.
 - Keep TLS termination enabled at Nginx.
 - Do not log Authorization headers, Meta authorization codes, app secrets, or
   decrypted access tokens.
@@ -224,9 +229,7 @@ For a failed batch, inspect in this order:
 4. account status, currency, capabilities, and selected assets;
 5. Meta error code/subcode and request ID.
 
-For a campaign a guard paused unexpectedly, open its checks on the campaigns
-page (or `GET /app/api/campaigns`): each check stores the observed metrics and
-the thresholds it was judged against. Resuming the campaign overrides the
-failed check; later checkpoints still apply. If tracker metrics look empty,
-verify the Keitaro sync job is running and the tracking links carry
-`sub_id_7={{campaign.id}}` / `sub_id_3={{campaign.name}}`.
+For a rule that paused unexpectedly, disable the rule first, then inspect its
+evaluation record, time window, attribution setting, sample gates, missing
+metric handling, and the target object's effective status. This version does
+not automatically resume paused objects.

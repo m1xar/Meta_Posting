@@ -8,4 +8,8 @@
 *.log
 *.out
 tmp/
+
+# Fork additions
 outputs/
+node_modules/
+*.xlsx

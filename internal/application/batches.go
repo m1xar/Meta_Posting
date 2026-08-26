@@ -6,14 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
 	"gorm.io/gorm"
 )
 
@@ -72,7 +71,7 @@ func (s *Service) CreateBatch(ctx context.Context, request CreateBatchRequest) (
 			LeavePaused:   request.LeavePaused,
 		}
 		if request.Tree != nil {
-			tree, treeErr := campaignTreeForAccount(*request.Tree, request.AccountOverrides[accountID.String()])
+			tree, treeErr := specForAccount(*request.Tree, request.AccountOverrides[accountID.String()])
 			if treeErr != nil {
 				return nil, invalid("account_overrides."+accountID.String(), treeErr.Error())
 			}
@@ -81,7 +80,7 @@ func (s *Service) CreateBatch(ctx context.Context, request CreateBatchRequest) (
 			}
 			plan.Tree = &tree
 		} else {
-			hierarchy, hierarchyErr := hierarchyForAccount(request.Hierarchy, request.AccountOverrides[accountID.String()])
+			hierarchy, hierarchyErr := specForAccount(request.Hierarchy, request.AccountOverrides[accountID.String()])
 			if hierarchyErr != nil {
 				return nil, invalid("account_overrides."+accountID.String(), hierarchyErr.Error())
 			}
@@ -311,7 +310,7 @@ func (s *Service) PublishAccountResult(ctx context.Context, resultID uuid.UUID) 
 				}
 				uploadedMedia[binding.MediaID] = replacement
 			}
-			if err := setHierarchyJSONPointer(&plan.Hierarchy, binding.Target, replacement); err != nil {
+			if err := setSpecJSONPointer(&plan.Hierarchy, binding.Target, replacement); err != nil {
 				return s.finishPublishFailure(ctx, batch.ConnectionID, accountResult, nil, fmt.Errorf("apply media binding %s: %w", binding.Target, err))
 			}
 		}
@@ -734,7 +733,7 @@ func checkpointForStage(
 	metaObjectID string,
 	requestJSON, responseJSON domain.JSON,
 ) domain.PublishedObject {
-	name, parent := "", ""
+	name := ""
 	switch objectType {
 	case domain.PublishedCampaign:
 		name = plan.Hierarchy.Campaign.Name
@@ -745,27 +744,32 @@ func checkpointForStage(
 	case domain.PublishedAd:
 		name = plan.Hierarchy.Ad.Name
 	}
-	desired := string(meta.StatusActive)
-	if plan.LeavePaused {
-		desired = string(meta.StatusPaused)
-	}
-	return domain.PublishedObject{
-		BatchID:              batch.ID,
-		BatchAccountResultID: accountResult.ID,
-		ConnectionID:         batch.ConnectionID,
-		AdAccountID:          accountResult.AdAccountID,
-		ObjectType:           objectType,
-		MetaObjectID:         metaObjectID,
-		ParentMetaObjectID:   parent,
-		Name:                 name,
-		DesiredStatus:        desired,
-		EffectiveStatus:      string(meta.StatusPaused),
-		IdempotencyKey:       batch.IdempotencyKey + ":" + string(objectType),
-		RequestJSON:          requestJSON,
-		ResponseJSON:         responseJSON,
-	}
+	// The flat path has always left ParentMetaObjectID empty; the parent link
+	// is recoverable from the batch hierarchy. Preserved deliberately so this
+	// refactor does not change what is written to published_objects.
+	return publishedCheckpoint(
+		batch,
+		accountResult,
+		objectType,
+		metaObjectID,
+		name,
+		"",
+		batch.IdempotencyKey+":"+string(objectType),
+		plan.LeavePaused,
+		requestJSON,
+		responseJSON,
+	)
 }
 
+// finishPublishFailure and finishTreePublishFailure are deliberately NOT
+// unified. They share a shape but differ on five axes that all decide either
+// whether budget can burn or whether the queue retries: retryable detection
+// (publishFailureJobError inspects per-stage failures, the tree path only asks
+// meta.IsRetryableError), connection-expiry marking, whether published objects
+// are reconstructed for the failure record, where the safety pause runs (call
+// site here, inside the finalizer there), and what a retryable failure returns
+// to the worker. Collapsing them would take five predicates and make the
+// safety-pause invariant harder to audit, not easier.
 func (s *Service) finishPublishFailure(
 	ctx context.Context,
 	connectionID uuid.UUID,
@@ -799,11 +803,7 @@ func (s *Service) finishPublishFailure(
 			}
 		}
 	}
-	code, subcode := "", ""
-	if graphErr != nil {
-		code = strconv.Itoa(graphErr.Code)
-		subcode = strconv.Itoa(graphErr.ErrorSubcode)
-	}
+	code, subcode := graphErrorCodes(graphErr)
 	retryErr := publishFailureJobError(cause, result)
 	var finishErr error
 	if retryErr != nil {
@@ -952,117 +952,4 @@ func lastPublishFailure(result meta.AccountPublishResult) error {
 		}
 	}
 	return errors.New("Meta publish did not complete")
-}
-
-func hierarchyForAccount(base meta.HierarchySpec, patch json.RawMessage) (meta.HierarchySpec, error) {
-	if len(bytes.TrimSpace(patch)) == 0 || bytes.Equal(bytes.TrimSpace(patch), []byte("null")) {
-		return base, nil
-	}
-	baseJSON, err := json.Marshal(base)
-	if err != nil {
-		return meta.HierarchySpec{}, err
-	}
-	var destination map[string]any
-	if err := decodeJSONUseNumber(baseJSON, &destination); err != nil {
-		return meta.HierarchySpec{}, err
-	}
-	var override map[string]any
-	if err := decodeJSONUseNumber(patch, &override); err != nil {
-		return meta.HierarchySpec{}, err
-	}
-	deepMerge(destination, override)
-	merged, err := json.Marshal(destination)
-	if err != nil {
-		return meta.HierarchySpec{}, err
-	}
-	var hierarchy meta.HierarchySpec
-	if err := json.Unmarshal(merged, &hierarchy); err != nil {
-		return meta.HierarchySpec{}, err
-	}
-	return hierarchy, nil
-}
-
-func decodeJSONUseNumber(data []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	return decoder.Decode(target)
-}
-
-func deepMerge(destination, override map[string]any) {
-	for key, value := range override {
-		overrideMap, overrideIsMap := value.(map[string]any)
-		destinationMap, destinationIsMap := destination[key].(map[string]any)
-		if overrideIsMap && destinationIsMap {
-			deepMerge(destinationMap, overrideMap)
-			continue
-		}
-		destination[key] = value
-	}
-}
-
-func setHierarchyJSONPointer(hierarchy *meta.HierarchySpec, pointer string, value string) error {
-	encoded, err := json.Marshal(hierarchy)
-	if err != nil {
-		return err
-	}
-	var document any
-	if err := decodeJSONUseNumber(encoded, &document); err != nil {
-		return err
-	}
-	tokens, err := jsonPointerTokens(pointer)
-	if err != nil {
-		return err
-	}
-	if err := setJSONPointerValue(document, tokens, value); err != nil {
-		return err
-	}
-	updated, err := json.Marshal(document)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(updated, hierarchy)
-}
-
-func jsonPointerTokens(pointer string) ([]string, error) {
-	if pointer == "" || pointer[0] != '/' {
-		return nil, errors.New("target must be a non-empty RFC 6901 JSON pointer")
-	}
-	raw := strings.Split(pointer[1:], "/")
-	for index := range raw {
-		raw[index] = strings.ReplaceAll(strings.ReplaceAll(raw[index], "~1", "/"), "~0", "~")
-		if raw[index] == "" {
-			return nil, errors.New("target contains an empty path segment")
-		}
-	}
-	return raw, nil
-}
-
-func setJSONPointerValue(current any, tokens []string, value string) error {
-	if len(tokens) == 0 {
-		return errors.New("target cannot replace the hierarchy root")
-	}
-	switch node := current.(type) {
-	case map[string]any:
-		if len(tokens) == 1 {
-			node[tokens[0]] = value
-			return nil
-		}
-		next, ok := node[tokens[0]]
-		if !ok {
-			return fmt.Errorf("path segment %q does not exist", tokens[0])
-		}
-		return setJSONPointerValue(next, tokens[1:], value)
-	case []any:
-		index, err := strconv.Atoi(tokens[0])
-		if err != nil || index < 0 || index >= len(node) {
-			return fmt.Errorf("invalid array index %q", tokens[0])
-		}
-		if len(tokens) == 1 {
-			node[index] = value
-			return nil
-		}
-		return setJSONPointerValue(node[index], tokens[1:], value)
-	default:
-		return fmt.Errorf("path crosses scalar at %q", tokens[0])
-	}
 }

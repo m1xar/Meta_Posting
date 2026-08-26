@@ -15,9 +15,9 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/require"
-	"github.com/watchers-factory/raze-posting/internal/application"
-	"github.com/watchers-factory/raze-posting/internal/config"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/application"
+	"github.com/watchers-factory/raze-ads/internal/config"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
 )
 
 func newTestServer(t *testing.T) *Server {
@@ -27,7 +27,11 @@ func newTestServer(t *testing.T) *Server {
 		Repos:  database.NewRepositories(nil),
 	}
 	server, err := New(service, Config{
-		OpenAPI: []byte("openapi: 3.1.0\n"),
+		InternalToken: []byte("test-internal-token"),
+		OpenAPI:       []byte("openapi: 3.1.0\n"),
+		// These tests exercise the shared-token path specifically. It is off
+		// by default in production, where per-user API keys replace it.
+		AllowLegacyInternalToken: true,
 	})
 	require.NoError(t, err)
 	return server
@@ -44,28 +48,19 @@ func TestPublicHealthAndRequestID(t *testing.T) {
 	require.Equal(t, "request-from-test", response.Header.Get("X-Request-ID"))
 }
 
-func TestProtectedRouteRequiresSession(t *testing.T) {
+func TestProtectedRouteRequiresBearerToken(t *testing.T) {
 	server := newTestServer(t)
-	request := httptest.NewRequest(http.MethodGet, "/app/api/capabilities", nil)
+	request := httptest.NewRequest(http.MethodGet, "/v1/capabilities", nil)
 	response, err := server.App.Test(request)
 	require.NoError(t, err)
 	defer response.Body.Close()
 	require.Equal(t, http.StatusUnauthorized, response.StatusCode)
+	require.Equal(t, `Bearer realm="raze-posting"`, response.Header.Get("WWW-Authenticate"))
 
 	var envelope errorEnvelope
 	require.NoError(t, json.NewDecoder(response.Body).Decode(&envelope))
-	require.Equal(t, "session_expired", envelope.Error.Code)
+	require.Equal(t, "unauthorized", envelope.Error.Code)
 	require.NotEmpty(t, envelope.Error.RequestID)
-}
-
-func TestAppPageRedirectsAnonymousToLogin(t *testing.T) {
-	server := newTestServer(t)
-	request := httptest.NewRequest(http.MethodGet, "/app", nil)
-	response, err := server.App.Test(request)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	require.Equal(t, http.StatusSeeOther, response.StatusCode)
-	require.Equal(t, "/login", response.Header.Get("Location"))
 }
 
 func TestUnauthorizedBodyIsRejectedBeforeFixedLengthBodyIsConsumed(t *testing.T) {
@@ -78,7 +73,7 @@ func TestUnauthorizedBodyIsRejectedBeforeFixedLengthBodyIsConsumed(t *testing.T)
 	require.NoError(t, connection.SetDeadline(time.Now().Add(2*time.Second)))
 
 	_, err = fmt.Fprintf(connection,
-		"POST /app/api/media HTTP/1.1\r\nHost: test\r\nContent-Type: multipart/form-data; boundary=test\r\nContent-Length: %d\r\n\r\nx",
+		"POST /v1/media HTTP/1.1\r\nHost: test\r\nContent-Type: multipart/form-data; boundary=test\r\nContent-Length: %d\r\n\r\nx",
 		1<<30,
 	)
 	require.NoError(t, err)
@@ -100,7 +95,7 @@ func TestUnauthorizedChunkedBodyIsRejectedBeforeFirstChunk(t *testing.T) {
 	require.NoError(t, connection.SetDeadline(time.Now().Add(2*time.Second)))
 
 	_, err = fmt.Fprint(connection,
-		"POST /app/api/media HTTP/1.1\r\nHost: test\r\nContent-Type: multipart/form-data; boundary=test\r\nTransfer-Encoding: chunked\r\n\r\n",
+		"POST /v1/media HTTP/1.1\r\nHost: test\r\nContent-Type: multipart/form-data; boundary=test\r\nTransfer-Encoding: chunked\r\n\r\n",
 	)
 	require.NoError(t, err)
 
@@ -121,7 +116,7 @@ func TestAuthorizedOversizedJSONIsRejectedAfterOneBytePrefetch(t *testing.T) {
 	require.NoError(t, connection.SetDeadline(time.Now().Add(2*time.Second)))
 
 	_, err = fmt.Fprintf(connection,
-		"POST /auth/login HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n{",
+		"POST /v1/oauth/sessions HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer test-internal-token\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n{",
 		maxJSONBodyBytes+1,
 	)
 	require.NoError(t, err)
@@ -133,10 +128,12 @@ func TestAuthorizedOversizedJSONIsRejectedAfterOneBytePrefetch(t *testing.T) {
 	require.True(t, response.Close)
 }
 
-func TestStrictJSONRejectsUnknownFields(t *testing.T) {
+func TestMalformedMultipartBodyReturnsBadRequest(t *testing.T) {
 	server := newTestServer(t)
-	request := httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"unexpected":true}`))
-	request.Header.Set("Content-Type", "application/json")
+	request := httptest.NewRequest(http.MethodPost, "/v1/media", strings.NewReader("not-a-multipart-body"))
+	request.Header.Set("Authorization", "Bearer test-internal-token")
+	request.Header.Set("Content-Type", "multipart/form-data; boundary=test")
+
 	response, err := server.App.Test(request)
 	require.NoError(t, err)
 	defer response.Body.Close()
@@ -147,18 +144,34 @@ func TestStrictJSONRejectsUnknownFields(t *testing.T) {
 	require.Equal(t, "invalid_request", envelope.Error.Code)
 }
 
-func TestAuthPagesArePublic(t *testing.T) {
+func TestProtectedCapabilitiesWithValidToken(t *testing.T) {
 	server := newTestServer(t)
-	for _, path := range []string{"/login", "/register"} {
-		response, err := server.App.Test(httptest.NewRequest(http.MethodGet, path, nil))
-		require.NoError(t, err)
-		body, readErr := io.ReadAll(response.Body)
-		response.Body.Close()
-		require.NoError(t, readErr)
-		require.Equal(t, http.StatusOK, response.StatusCode, path)
-		require.Contains(t, response.Header.Get("Content-Type"), "text/html", path)
-		require.NotEmpty(t, body, path)
-	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/capabilities", nil)
+	request.Header.Set("Authorization", "Bearer test-internal-token")
+	response, err := server.App.Test(request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"meta_api_version":"v25.0"`)
+	require.Contains(t, string(body), `"instant_forms"`)
+}
+
+func TestStrictJSONRejectsUnknownFields(t *testing.T) {
+	server := newTestServer(t)
+	request := httptest.NewRequest(http.MethodPost, "/v1/oauth/sessions", strings.NewReader(`{"unexpected":true}`))
+	request.Header.Set("Authorization", "Bearer test-internal-token")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := server.App.Test(request)
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusBadRequest, response.StatusCode)
+
+	var envelope errorEnvelope
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&envelope))
+	require.Equal(t, "invalid_request", envelope.Error.Code)
 }
 
 func TestOpenAPIDocumentIsPublic(t *testing.T) {

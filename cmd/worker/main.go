@@ -12,15 +12,20 @@ import (
 	"syscall"
 	"time"
 
+	// Ship the timezone database in the binary. Insights dates are resolved in
+	// each ad account's timezone, and a container without tzdata would make
+	// time.LoadLocation fail into UTC silently.
+	_ "time/tzdata"
+
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/application"
-	"github.com/watchers-factory/raze-posting/internal/config"
-	"github.com/watchers-factory/raze-posting/internal/keitaro"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	platformcrypto "github.com/watchers-factory/raze-posting/internal/platform/crypto"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
-	"github.com/watchers-factory/raze-posting/internal/storage"
-	"github.com/watchers-factory/raze-posting/internal/worker"
+	"github.com/watchers-factory/raze-ads/internal/application"
+	"github.com/watchers-factory/raze-ads/internal/config"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	platformcrypto "github.com/watchers-factory/raze-ads/internal/platform/crypto"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/storage"
+	"github.com/watchers-factory/raze-ads/internal/worker"
 )
 
 const workerStorageLimit = int64(1 << 30)
@@ -80,13 +85,6 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("initialize application service: %w", err)
 	}
-	if cfg.Keitaro.Enabled() {
-		trackerClient, trackerErr := keitaro.NewClient(cfg.Keitaro.BaseURL, cfg.Keitaro.APIKey, cfg.Keitaro.RequestTimeout)
-		if trackerErr != nil {
-			return fmt.Errorf("initialize Keitaro client: %w", trackerErr)
-		}
-		service.Tracker = trackerClient
-	}
 
 	workerID := newWorkerID()
 	runners := make([]*worker.Runner, 0, cfg.Worker.Concurrency)
@@ -102,17 +100,67 @@ func run(logger *slog.Logger) error {
 		}
 		runners = append(runners, runner)
 	}
-	scheduler, err := worker.NewScheduler(worker.RepositoryScheduleStore{Repositories: repositories}, worker.SchedulerOptions{
-		InsightsInterval: cfg.Worker.InsightsInterval,
-		GuardInterval:    cfg.Worker.GuardInterval,
-		TrackerInterval:  cfg.Worker.TrackerInterval,
-		TrackerEnabled:   cfg.Keitaro.Enabled(),
-		MaxAttempts:      cfg.Worker.MaxAttempts,
-		Logger:           logger,
+	scheduleStore := worker.RepositoryScheduleStore{Repositories: repositories}
+	scheduler, err := worker.NewScheduler(scheduleStore, worker.SchedulerOptions{
+		InsightsInterval:    cfg.Worker.InsightsInterval,
+		RuleInterval:        cfg.Worker.RuleInterval,
+		MaintenanceInterval: cfg.Worker.MaintenanceInterval,
+		MaxAttempts:         cfg.Worker.MaxAttempts,
+		Logger:              logger,
+
+		// Cadence falls off with cost. Account and campaign levels are one
+		// row per object per day and can be polled for every account each
+		// cycle; ad level multiplies by the number of ads, so it rotates
+		// through a slice of accounts at a time.
+		AccountLevelPlans: []worker.AccountLevelPlan{
+			{
+				Level:        domain.InsightAccount,
+				Interval:     cfg.Worker.AccountInsightsInterval,
+				SinceDaysAgo: 1,
+				Priority:     18,
+			},
+			{
+				Level:        domain.InsightCampaign,
+				Interval:     cfg.Worker.CampaignInsightsInterval,
+				SinceDaysAgo: 1,
+				Priority:     16,
+			},
+			{
+				Level:        domain.InsightAdSet,
+				Interval:     cfg.Worker.AdSetInsightsInterval,
+				SinceDaysAgo: 1,
+				Priority:     14,
+			},
+			{
+				Level:        domain.InsightAd,
+				Interval:     cfg.Worker.AdInsightsInterval,
+				BatchSize:    cfg.Worker.AdLevelBatchSize,
+				SinceDaysAgo: 1,
+				Priority:     12,
+			},
+		},
+		FastLaneInterval:    cfg.Worker.FastLaneInterval,
+		FastRuleMaxInterval: cfg.Worker.FastRuleMaxInterval,
+		DiscoveryInterval:   cfg.Worker.DiscoveryInterval,
+		EntitySyncInterval:  cfg.Worker.EntitySyncInterval,
+		AdLevelBatchSize:    cfg.Worker.AdLevelBatchSize,
+
+		// The lookback re-reads the attribution window at campaign level.
+		// Running it at ad level too would multiply the cost by the number of
+		// ads for a restatement that is visible in the aggregate anyway.
+		LookbackLevel:    domain.InsightCampaign,
+		LookbackDays:     cfg.Worker.InsightsLookbackDays,
+		LookbackInterval: 24 * time.Hour,
+
+		RetentionInterval: cfg.Worker.RetentionInterval,
+		InsightRetention:  cfg.Worker.InsightRetention,
 	})
 	if err != nil {
 		return err
 	}
+	scheduler.WithAccountStore(worker.RepositoryAccountScheduleStore{
+		RepositoryScheduleStore: scheduleStore,
+	})
 
 	runCtx, cancelRun := context.WithCancel(signalCtx)
 	defer cancelRun()

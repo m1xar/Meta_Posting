@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
 )
 
 func TestValidateConnectionForToken(t *testing.T) {

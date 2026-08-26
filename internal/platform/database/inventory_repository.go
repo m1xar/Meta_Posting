@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/domain"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -17,6 +17,7 @@ type BusinessFilter struct {
 }
 
 type AdAccountFilter struct {
+	Scope         Scope
 	ConnectionID  *uuid.UUID
 	BusinessID    *uuid.UUID
 	AccountStatus *int
@@ -98,15 +99,23 @@ func (r *InventoryRepository) ListBusinesses(ctx context.Context, filter Busines
 	return domain.Page[domain.Business]{Items: items, Total: total, Limit: page.Limit, Offset: page.Offset}, nil
 }
 
+// adAccountUpdateColumns is the set discovery refreshes on every sweep.
+var adAccountUpdateColumns = []string{
+	"business_id", "account_id", "name", "currency", "timezone_name",
+	"timezone_offset_utc", "account_status", "disable_reason", "business_name",
+	"amount_spent", "balance", "spend_cap", "capabilities", "raw_json",
+	"user_tasks", "funding_source", "funding_source_details", "is_prepay_account",
+	"is_active", "last_synced_at", "updated_at",
+}
+
 func (r *InventoryRepository) UpsertAdAccount(ctx context.Context, account *domain.AdAccount) error {
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "connection_id"}, {Name: "meta_ad_account_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"business_id", "account_id", "name", "currency", "timezone_name",
-			"timezone_offset_utc", "account_status", "disable_reason", "business_name",
-			"amount_spent", "balance", "spend_cap", "capabilities", "raw_json",
-			"is_active", "last_synced_at", "updated_at",
-		}),
+		// Every column discovery refreshes must be listed here. A field added
+		// to the model but not to this list is written once on insert and
+		// then never updated again, which looks exactly like Meta not
+		// returning it.
+		DoUpdates: clause.AssignmentColumns(adAccountUpdateColumns),
 	}, clause.Returning{}).Create(account).Error
 }
 
@@ -128,8 +137,14 @@ func (r *InventoryRepository) FindAdAccountByMetaID(ctx context.Context, connect
 }
 
 func (r *InventoryRepository) ListAdAccounts(ctx context.Context, filter AdAccountFilter) (domain.Page[domain.AdAccount], error) {
+	if !filter.Scope.Valid() {
+		return domain.Page[domain.AdAccount]{}, ErrScopeRequired
+	}
 	page := filter.Page.Normalized()
-	query := r.db.WithContext(ctx).Model(&domain.AdAccount{})
+	query := filter.Scope.Apply(
+		r.db.WithContext(ctx).Model(&domain.AdAccount{}),
+		"ad_accounts",
+	)
 	if filter.ConnectionID != nil {
 		query = query.Where("connection_id = ?", *filter.ConnectionID)
 	}

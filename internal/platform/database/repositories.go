@@ -14,6 +14,7 @@ type Repositories struct {
 	db *gorm.DB
 
 	Users           *UserRepository
+	APIKeys         *APIKeyRepository
 	MetaConnections *MetaConnectionRepository
 	OAuthSessions   *OAuthSessionRepository
 	Inventory       *InventoryRepository
@@ -21,8 +22,11 @@ type Repositories struct {
 	Batches         *BatchRepository
 	Jobs            *JobRepository
 	Insights        *InsightRepository
-	Guards          *GuardRepository
-	Tracker         *TrackerRepository
+	AdInsights      *AdInsightRepository
+	AdEntities      *AdEntityRepository
+	AdAccountSync   *AdAccountSyncStateRepository
+	InsightsCursors *InsightsCursorRepository
+	Rules           *RuleRepository
 	Audit           *AuditRepository
 }
 
@@ -34,6 +38,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 
 func (r *Repositories) bind() {
 	r.Users = &UserRepository{db: r.db}
+	r.APIKeys = &APIKeyRepository{db: r.db}
 	r.MetaConnections = &MetaConnectionRepository{db: r.db}
 	r.OAuthSessions = &OAuthSessionRepository{db: r.db}
 	r.Inventory = &InventoryRepository{db: r.db}
@@ -41,8 +46,11 @@ func (r *Repositories) bind() {
 	r.Batches = &BatchRepository{db: r.db}
 	r.Jobs = &JobRepository{db: r.db}
 	r.Insights = &InsightRepository{db: r.db}
-	r.Guards = &GuardRepository{db: r.db}
-	r.Tracker = &TrackerRepository{db: r.db}
+	r.AdInsights = &AdInsightRepository{db: r.db}
+	r.AdEntities = &AdEntityRepository{db: r.db}
+	r.AdAccountSync = &AdAccountSyncStateRepository{db: r.db}
+	r.InsightsCursors = &InsightsCursorRepository{db: r.db}
+	r.Rules = &RuleRepository{db: r.db}
 	r.Audit = &AuditRepository{db: r.db}
 }
 

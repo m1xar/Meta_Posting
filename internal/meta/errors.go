@@ -42,6 +42,13 @@ func (e *GraphError) Retryable() bool {
 	if e == nil {
 		return false
 	}
+	// An oversized response arrives as the generic transient code 1, but
+	// repeating the identical request cannot make it smaller: it burns the
+	// whole retry budget on requests guaranteed to fail the same way. The
+	// caller has to shrink the page instead - see CollectPagesAdaptive.
+	if IsOversizedRequest(e) {
+		return false
+	}
 	if e.IsTransient || e.HTTPStatus == http.StatusTooManyRequests || e.HTTPStatus >= 500 {
 		return true
 	}

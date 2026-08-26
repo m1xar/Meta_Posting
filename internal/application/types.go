@@ -5,16 +5,33 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/rules"
 )
 
 const (
 	JobSyncConnection  = "sync_connection"
 	JobPublishAccount  = "publish_account"
 	JobCollectInsights = "collect_insights"
-	JobEvaluateGuards  = "evaluate_guards"
-	JobSyncTracker     = "sync_tracker"
+	JobEvaluateRules   = "evaluate_rules"
+
+	// Per-ad-account jobs.
+	//
+	// These must NOT be added to worker.isRecurringJob, and their types must
+	// not be added to migration 00003's uq_jobs_recurring_active, which is a
+	// partial unique index on (connection_id, type). Doing either would
+	// collapse every ad account of a connection into a single job and silently
+	// stop polling all but one account. Their dedupe comes from the general
+	// uq_jobs_type_dedupe (type, dedupe_key) instead.
+	JobSyncAdEntities         = "sync_ad_entities"
+	JobCollectAccountInsights = "collect_account_insights"
+	JobBackfillInsights       = "backfill_insights"
+	JobRepairInsightGaps      = "repair_insight_gaps"
+	JobCollectWindowedReach   = "collect_windowed_reach"
+
+	// Connection-scoped maintenance.
+	JobRetentionSweep = "retention_sweep"
 )
 
 const LifetimeInsightQueryHash = "lifetime-default-v2"
@@ -83,43 +100,30 @@ type InsightsJobPayload struct {
 	ConnectionID uuid.UUID `json:"connection_id"`
 }
 
-type EvaluateGuardsJobPayload struct {
+type EvaluateRulesJobPayload struct {
 	ConnectionID *uuid.UUID `json:"connection_id,omitempty"`
 }
 
-type SyncTrackerJobPayload struct{}
-
-// GuardCheckpoint is one rung of the spend ladder. When a campaign's lifetime
-// spend reaches Spend, every non-zero minimum below must already be met or the
-// campaign is paused. Clicks and impressions come from Facebook Insights;
-// tracker minimums come from Keitaro (leads are registrations, sales are
-// deposits).
-type GuardCheckpoint struct {
-	Spend             float64 `json:"spend"`
-	MinClicks         int64   `json:"min_clicks,omitempty"`
-	MinImpressions    int64   `json:"min_impressions,omitempty"`
-	MinTrackerClicks  int64   `json:"min_tracker_clicks,omitempty"`
-	MinTrackerLeads   float64 `json:"min_tracker_leads,omitempty"`
-	MinTrackerSales   float64 `json:"min_tracker_sales,omitempty"`
-	MinTrackerRevenue float64 `json:"min_tracker_revenue,omitempty"`
+type CreateRuleRequest struct {
+	ConnectionID              uuid.UUID           `json:"connection_id"`
+	AdAccountID               *uuid.UUID          `json:"ad_account_id,omitempty"`
+	BatchID                   *uuid.UUID          `json:"batch_id,omitempty"`
+	Name                      string              `json:"name"`
+	Status                    domain.RuleStatus   `json:"status,omitempty"`
+	ScopeLevel                domain.InsightLevel `json:"scope_level"`
+	Action                    domain.RuleAction   `json:"action,omitempty"`
+	Conditions                rules.Group         `json:"conditions"`
+	LookbackSeconds           int64               `json:"lookback_seconds"`
+	EvaluationIntervalSeconds int64               `json:"evaluation_interval_seconds,omitempty"`
+	GracePeriodSeconds        int64               `json:"grace_period_seconds,omitempty"`
+	CooldownSeconds           int64               `json:"cooldown_seconds,omitempty"`
+	MinimumSpend              float64             `json:"minimum_spend,omitempty"`
+	MinimumImpressions        int64               `json:"minimum_impressions,omitempty"`
+	Timezone                  string              `json:"timezone,omitempty"`
+	Metadata                  map[string]any      `json:"metadata,omitempty"`
 }
 
-type CreateGuardRequest struct {
-	ConnectionID              uuid.UUID          `json:"connection_id"`
-	BatchID                   *uuid.UUID         `json:"batch_id,omitempty"`
-	PublishedObjectID         *uuid.UUID         `json:"published_object_id,omitempty"`
-	Name                      string             `json:"name"`
-	Status                    domain.GuardStatus `json:"status,omitempty"`
-	Checkpoints               []GuardCheckpoint  `json:"checkpoints"`
-	EvaluationIntervalSeconds int64              `json:"evaluation_interval_seconds,omitempty"`
-}
-
-type UpdateGuardRequest struct {
-	Name                      string             `json:"name,omitempty"`
-	Status                    domain.GuardStatus `json:"status,omitempty"`
-	Checkpoints               []GuardCheckpoint  `json:"checkpoints"`
-	EvaluationIntervalSeconds int64              `json:"evaluation_interval_seconds,omitempty"`
-}
+type UpdateRuleRequest = CreateRuleRequest
 
 type Capabilities struct {
 	MetaAPIVersion       string                   `json:"meta_api_version"`
@@ -130,7 +134,60 @@ type Capabilities struct {
 	BidStrategies        []meta.BidStrategy       `json:"bid_strategies"`
 	SpecialAdCategories  []meta.SpecialAdCategory `json:"special_ad_categories"`
 	CreativeFormats      []string                 `json:"creative_formats"`
-	GuardMetrics         []string                 `json:"guard_metrics"`
+	RuleOperators        []rules.Operator         `json:"rule_operators"`
+	RuleActions          []rules.Action           `json:"rule_actions"`
+	RuleTargetLevels     []rules.TargetLevel      `json:"rule_target_levels"`
+	CommonRuleMetrics    []string                 `json:"common_rule_metrics"`
 	RawFieldsSupported   bool                     `json:"raw_fields_supported"`
 	ExcludedCapabilities []string                 `json:"excluded_capabilities"`
+}
+
+// AdEntitiesJobPayload refreshes one ad account's campaign/ad set/ad
+// inventory.
+type AdEntitiesJobPayload struct {
+	AdAccountID uuid.UUID `json:"ad_account_id"`
+}
+
+// AccountInsightsJobPayload carries a frozen date range.
+//
+// The scheduler resolves Since and Until at enqueue time rather than letting
+// the worker compute "today", so a job retried hours later - or after
+// midnight in the account's timezone - re-fetches exactly the same range and
+// the daily upsert stays deterministic.
+type AccountInsightsJobPayload struct {
+	AdAccountID uuid.UUID           `json:"ad_account_id"`
+	Level       domain.InsightLevel `json:"level"`
+	Since       string              `json:"since"`
+	Until       string              `json:"until"`
+	Reason      string              `json:"reason"`
+}
+
+// BackfillInsightsJobPayload walks history backwards one chunk at a time. The
+// range is computed by the worker from stored watermarks rather than frozen,
+// because each chunk depends on how far the previous one got.
+type BackfillInsightsJobPayload struct {
+	AdAccountID uuid.UUID           `json:"ad_account_id"`
+	Level       domain.InsightLevel `json:"level"`
+}
+
+// RepairInsightGapsJobPayload re-fetches days never covered for a level.
+type RepairInsightGapsJobPayload struct {
+	AdAccountID uuid.UUID           `json:"ad_account_id"`
+	Level       domain.InsightLevel `json:"level"`
+	Since       string              `json:"since"`
+	Until       string              `json:"until"`
+}
+
+// WindowedReachJobPayload fetches deduplicated reach for an explicit window.
+type WindowedReachJobPayload struct {
+	AdAccountID uuid.UUID           `json:"ad_account_id"`
+	Level       domain.InsightLevel `json:"level"`
+	Since       string              `json:"since"`
+	Until       string              `json:"until"`
+}
+
+// RetentionSweepJobPayload trims stored history beyond the retention horizon.
+type RetentionSweepJobPayload struct {
+	Before time.Time `json:"before"`
+	Limit  int       `json:"limit"`
 }

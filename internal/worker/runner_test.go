@@ -13,9 +13,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/watchers-factory/raze-posting/internal/application"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/application"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
 	"gorm.io/gorm"
 )
 
@@ -58,8 +58,8 @@ func TestRunnerDispatchesSupportedJobs(t *testing.T) {
 		},
 		{
 			name:       "rules",
-			jobType:    application.JobEvaluateGuards,
-			payload:    domain.MustJSON(application.EvaluateGuardsJobPayload{ConnectionID: &connectionID}),
+			jobType:    application.JobEvaluateRules,
+			payload:    domain.MustJSON(application.EvaluateRulesJobPayload{ConnectionID: &connectionID}),
 			connection: &connectionID,
 			assertCall: func(t *testing.T, service *fakeJobService) {
 				require.Len(t, service.ruleCalls, 1)
@@ -239,6 +239,13 @@ func claimedJob(jobType string, payload domain.JSON) *domain.Job {
 
 type fakeJobService struct {
 	mu             sync.Mutex
+	entityCalls    []application.AdEntitiesJobPayload
+	accountCalls   []application.AccountInsightsJobPayload
+	backfillCalls  []application.BackfillInsightsJobPayload
+	gapCalls       []application.RepairInsightGapsJobPayload
+	reachCalls     []application.WindowedReachJobPayload
+	retentionCalls []application.RetentionSweepJobPayload
+	accountErr     error
 	syncCalls      []uuid.UUID
 	publishCalls   []uuid.UUID
 	insightCalls   []uuid.UUID
@@ -283,9 +290,7 @@ func (s *fakeJobService) CollectInsights(ctx context.Context, id uuid.UUID) erro
 	return err
 }
 
-func (s *fakeJobService) SyncTrackerStats(_ context.Context) error { return nil }
-
-func (s *fakeJobService) EvaluateDueGuards(_ context.Context, id *uuid.UUID) error {
+func (s *fakeJobService) EvaluateDueRules(_ context.Context, id *uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if id == nil {
@@ -358,3 +363,45 @@ func (s *fakeJobStore) Fail(
 }
 
 func ptrTime(value time.Time) *time.Time { return &value }
+
+func (s *fakeJobService) RunAdEntitiesJob(_ context.Context, payload application.AdEntitiesJobPayload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entityCalls = append(s.entityCalls, payload)
+	return s.accountErr
+}
+
+func (s *fakeJobService) RunAccountInsightsJob(_ context.Context, payload application.AccountInsightsJobPayload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accountCalls = append(s.accountCalls, payload)
+	return s.accountErr
+}
+
+func (s *fakeJobService) RunBackfillInsightsJob(_ context.Context, payload application.BackfillInsightsJobPayload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backfillCalls = append(s.backfillCalls, payload)
+	return s.accountErr
+}
+
+func (s *fakeJobService) RunRepairInsightGapsJob(_ context.Context, payload application.RepairInsightGapsJobPayload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gapCalls = append(s.gapCalls, payload)
+	return s.accountErr
+}
+
+func (s *fakeJobService) RunWindowedReachJob(_ context.Context, payload application.WindowedReachJobPayload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reachCalls = append(s.reachCalls, payload)
+	return s.accountErr
+}
+
+func (s *fakeJobService) RunRetentionSweepJob(_ context.Context, payload application.RetentionSweepJobPayload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retentionCalls = append(s.retentionCalls, payload)
+	return s.accountErr
+}

@@ -10,8 +10,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/application"
-	"github.com/watchers-factory/raze-posting/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/application"
+	"github.com/watchers-factory/raze-ads/internal/domain"
 	"gorm.io/gorm"
 )
 
@@ -21,8 +21,14 @@ type JobService interface {
 	SyncConnection(context.Context, uuid.UUID) (application.SyncSummary, error)
 	PublishAccountResult(context.Context, uuid.UUID) error
 	CollectInsights(context.Context, uuid.UUID) error
-	EvaluateDueGuards(context.Context, *uuid.UUID) error
-	SyncTrackerStats(context.Context) error
+	EvaluateDueRules(context.Context, *uuid.UUID) error
+
+	RunAdEntitiesJob(context.Context, application.AdEntitiesJobPayload) error
+	RunAccountInsightsJob(context.Context, application.AccountInsightsJobPayload) error
+	RunBackfillInsightsJob(context.Context, application.BackfillInsightsJobPayload) error
+	RunRepairInsightGapsJob(context.Context, application.RepairInsightGapsJobPayload) error
+	RunWindowedReachJob(context.Context, application.WindowedReachJobPayload) error
+	RunRetentionSweepJob(context.Context, application.RetentionSweepJobPayload) error
 }
 
 type JobStore interface {
@@ -274,10 +280,8 @@ func (r *Runner) dispatch(ctx context.Context, job *domain.Job) error {
 		}
 		return r.service.CollectInsights(ctx, payload.ConnectionID)
 
-	case application.JobSyncTracker:
-		return r.service.SyncTrackerStats(ctx)
-	case application.JobEvaluateGuards:
-		var payload application.EvaluateGuardsJobPayload
+	case application.JobEvaluateRules:
+		var payload application.EvaluateRulesJobPayload
 		if err := decodeJobPayload(job, &payload); err != nil {
 			return err
 		}
@@ -288,11 +292,79 @@ func (r *Runner) dispatch(ctx context.Context, job *domain.Job) error {
 		} else if job.ConnectionID != nil {
 			return errors.New("worker: evaluate_rules payload.connection_id is required for a connection-scoped job")
 		}
-		return r.service.EvaluateDueGuards(ctx, payload.ConnectionID)
+		return r.service.EvaluateDueRules(ctx, payload.ConnectionID)
+
+	case application.JobSyncAdEntities:
+		var payload application.AdEntitiesJobPayload
+		if err := decodeJobPayload(job, &payload); err != nil {
+			return err
+		}
+		if err := validateAdAccountPayload(job, payload.AdAccountID); err != nil {
+			return err
+		}
+		return r.service.RunAdEntitiesJob(ctx, payload)
+
+	case application.JobCollectAccountInsights:
+		var payload application.AccountInsightsJobPayload
+		if err := decodeJobPayload(job, &payload); err != nil {
+			return err
+		}
+		if err := validateAdAccountPayload(job, payload.AdAccountID); err != nil {
+			return err
+		}
+		return r.service.RunAccountInsightsJob(ctx, payload)
+
+	case application.JobBackfillInsights:
+		var payload application.BackfillInsightsJobPayload
+		if err := decodeJobPayload(job, &payload); err != nil {
+			return err
+		}
+		if err := validateAdAccountPayload(job, payload.AdAccountID); err != nil {
+			return err
+		}
+		return r.service.RunBackfillInsightsJob(ctx, payload)
+
+	case application.JobRepairInsightGaps:
+		var payload application.RepairInsightGapsJobPayload
+		if err := decodeJobPayload(job, &payload); err != nil {
+			return err
+		}
+		if err := validateAdAccountPayload(job, payload.AdAccountID); err != nil {
+			return err
+		}
+		return r.service.RunRepairInsightGapsJob(ctx, payload)
+
+	case application.JobCollectWindowedReach:
+		var payload application.WindowedReachJobPayload
+		if err := decodeJobPayload(job, &payload); err != nil {
+			return err
+		}
+		if err := validateAdAccountPayload(job, payload.AdAccountID); err != nil {
+			return err
+		}
+		return r.service.RunWindowedReachJob(ctx, payload)
+
+	case application.JobRetentionSweep:
+		var payload application.RetentionSweepJobPayload
+		if err := decodeJobPayload(job, &payload); err != nil {
+			return err
+		}
+		return r.service.RunRetentionSweepJob(ctx, payload)
 
 	default:
 		return fmt.Errorf("worker: unsupported job type %q", job.Type)
 	}
+}
+
+// validateAdAccountPayload is the per-account counterpart of
+// validateConnectionPayload. It cannot check the account against
+// job.ConnectionID, since the job carries the connection for queue routing
+// while the payload names the account within it.
+func validateAdAccountPayload(job *domain.Job, adAccountID uuid.UUID) error {
+	if adAccountID == uuid.Nil {
+		return fmt.Errorf("worker: %s payload.ad_account_id is required", job.Type)
+	}
+	return nil
 }
 
 func decodeJobPayload(job *domain.Job, target any) error {

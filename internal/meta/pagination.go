@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
+	"strings"
 )
 
 type Paging struct {
@@ -32,28 +34,47 @@ func CollectPages[T any](
 	accessToken string,
 	query url.Values,
 ) ([]T, error) {
+	result, _, err := CollectPagesWithMeta[T](ctx, client, graphPath, accessToken, query)
+	return result, err
+}
+
+// CollectPagesWithMeta is CollectPages, additionally returning the response
+// metadata of the last page fetched. Rate-limit usage headers are cumulative
+// per token, so the final page carries the most current reading - which is
+// what the throttling governor needs in order to slow down before Meta blocks
+// the app rather than after.
+func CollectPagesWithMeta[T any](
+	ctx context.Context,
+	client *Client,
+	graphPath string,
+	accessToken string,
+	query url.Values,
+) ([]T, ResponseMeta, error) {
 	if client == nil {
-		return nil, errors.New("meta: client is nil")
+		return nil, ResponseMeta{}, errors.New("meta: client is nil")
 	}
 	currentPath := graphPath
 	currentQuery := cloneValues(query)
 	var result []T
+	var lastMeta ResponseMeta
 
 	// This guard catches a malformed/cyclic paging response while remaining
 	// far above any realistic asset list.
 	for pageNumber := 0; pageNumber < 10000; pageNumber++ {
 		var page GraphPage[T]
-		if err := client.Get(ctx, currentPath, accessToken, currentQuery, &page); err != nil {
-			return nil, err
+		pageMeta, err := client.GetWithMeta(ctx, currentPath, accessToken, currentQuery, &page)
+		if err != nil {
+			return nil, pageMeta, err
 		}
+		lastMeta = pageMeta
 		result = append(result, page.Data...)
 		if page.Paging.Next == "" {
-			return result, nil
+			return result, lastMeta, nil
 		}
 		currentPath = page.Paging.Next
 		currentQuery = nil
 	}
-	return nil, fmt.Errorf("meta: paging exceeded safety limit")
+	return nil, lastMeta, fmt.Errorf("meta: paging exceeded safety limit")
 }
 
 func cloneValues(source url.Values) url.Values {
@@ -65,4 +86,63 @@ func cloneValues(source url.Values) url.Values {
 		clone[key] = append([]string(nil), entries...)
 	}
 	return clone
+}
+
+// oversizedResponseHint is how Meta says a request asks for too much at once.
+// It arrives as the generic transient code 1, so retrying it unchanged - as a
+// transient error normally would be - fails identically every time until the
+// job dies. The page size has to shrink for the retry to mean anything.
+const oversizedResponseHint = "reduce the amount of data"
+
+// IsOversizedRequest reports whether Meta refused because the page was too big.
+func IsOversizedRequest(err error) bool {
+	var graphErr *GraphError
+	if !errors.As(err, &graphErr) {
+		return false
+	}
+	return graphErr.Code == 1 &&
+		strings.Contains(strings.ToLower(graphErr.Message), oversizedResponseHint)
+}
+
+// minAdaptiveLimit is the floor. Below this the request is not the problem and
+// the error means something else.
+const minAdaptiveLimit = 10
+
+// CollectPagesAdaptive pages like CollectPages, halving the page size whenever
+// Meta says the response would be too large.
+//
+// Accounts differ enormously - some hold a handful of ads, some thousands with
+// full creative sub-selections - so any fixed page size is wrong for someone.
+// Shrinking on demand lets one code path serve both without asking the caller
+// to guess.
+func CollectPagesAdaptive[T any](
+	ctx context.Context,
+	client *Client,
+	graphPath string,
+	accessToken string,
+	query url.Values,
+) ([]T, error) {
+	attempt := cloneValues(query)
+	limit := 0
+	if raw := attempt.Get("limit"); raw != "" {
+		limit, _ = strconv.Atoi(raw)
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	for {
+		attempt.Set("limit", strconv.Itoa(limit))
+		result, err := CollectPages[T](ctx, client, graphPath, accessToken, attempt)
+		if err == nil {
+			return result, nil
+		}
+		if !IsOversizedRequest(err) || limit <= minAdaptiveLimit {
+			return nil, err
+		}
+		limit /= 2
+		if limit < minAdaptiveLimit {
+			limit = minAdaptiveLimit
+		}
+	}
 }

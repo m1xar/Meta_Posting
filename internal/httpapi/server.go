@@ -3,6 +3,8 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,10 +20,10 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/google/uuid"
 	"github.com/valyala/fasthttp"
-	"github.com/watchers-factory/raze-posting/internal/application"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
-	"github.com/watchers-factory/raze-posting/internal/storage"
+	"github.com/watchers-factory/raze-ads/internal/application"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/storage"
 	"gorm.io/gorm"
 )
 
@@ -36,21 +38,30 @@ const (
 )
 
 type Config struct {
-	Environment string
-	OpenAPI     []byte
-	Ready       func(context.Context) error
-	Logger      *slog.Logger
-	BodyLimit   int
+	InternalToken []byte
+	Environment   string
+	OpenAPI       []byte
+	Ready         func(context.Context) error
+	Logger        *slog.Logger
+	BodyLimit     int
+
+	// AllowLegacyInternalToken keeps the shared bearer token accepted as an
+	// admin credential. Off by default; it reads every tenant and owns
+	// nothing, so it exists only as a migration path to per-user API keys.
+	AllowLegacyInternalToken bool
 }
 
 type Server struct {
 	App           *fiber.App
 	service       *application.Service
+	token         [sha256.Size]byte
 	openAPI       []byte
 	ready         func(context.Context) error
 	logger        *slog.Logger
 	bodyLimit     int
 	secureCookies bool
+
+	allowLegacyInternalToken bool
 }
 
 type errorEnvelope struct {
@@ -68,6 +79,9 @@ func New(service *application.Service, cfg Config) (*Server, error) {
 	if service == nil || service.Repos == nil {
 		return nil, errors.New("httpapi: application service is required")
 	}
+	if len(cfg.InternalToken) == 0 {
+		return nil, errors.New("httpapi: internal API token is required")
+	}
 	if cfg.BodyLimit <= 0 {
 		cfg.BodyLimit = defaultBodyLimit
 	}
@@ -77,11 +91,14 @@ func New(service *application.Service, cfg Config) (*Server, error) {
 
 	server := &Server{
 		service:       service,
+		token:         sha256.Sum256(cfg.InternalToken),
 		openAPI:       append([]byte(nil), cfg.OpenAPI...),
 		ready:         cfg.Ready,
 		logger:        cfg.Logger,
 		bodyLimit:     cfg.BodyLimit,
 		secureCookies: !strings.EqualFold(cfg.Environment, "development"),
+
+		allowLegacyInternalToken: cfg.AllowLegacyInternalToken,
 	}
 	server.App = fiber.New(fiber.Config{
 		AppName:                      "Raze Posting API",
@@ -118,35 +135,77 @@ func (s *Server) routes() {
 	s.App.Get("/terms", s.termsOfService)
 	s.App.Get("/data-deletion", s.dataDeletion)
 	s.App.Get("/oauth/facebook/callback", s.oauthCallback)
-	s.App.Get("/static/app.css", s.staticAsset("webui/app.css", "text/css; charset=utf-8"))
-	s.App.Get("/static/app.js", s.staticAsset("webui/app.js", "text/javascript; charset=utf-8"))
-	s.App.Get("/login", s.loginPage)
-	s.App.Get("/register", s.registerPage)
+
+	// Operator workspace. The shell is public because it holds no data: it
+	// asks /v1/me who it is talking to and renders the sign-in gate when the
+	// answer is 401.
+	s.App.Get("/app", s.workspacePage)
+	s.App.Get("/app/", s.workspacePage)
+	s.App.Get("/static/*", workspaceAssets)
 	s.App.Post("/auth/login", s.loginUser)
 	s.App.Post("/auth/register", s.registerUser)
 	s.App.Post("/auth/logout", s.requireUser, s.requireCSRF, s.logoutUser)
-
-	s.App.Get("/app", s.requireUser, s.dashboardPage)
-	s.App.Get("/app/launch", s.requireUser, s.launcherPage)
-	s.App.Get("/app/campaigns", s.requireUser, s.campaignsPage)
-	s.App.Get("/app/accounts/:id", s.requireUser, s.accountPage)
+	s.App.Get("/app/api/overview", s.requireUser, s.appOverview)
 	s.App.Get("/app/connect/meta", s.requireUser, s.startUserOAuthRedirect)
+	s.App.Post("/app/api/connections/:id/sync", s.requireUser, s.requireCSRF, s.syncUserConnection)
+	s.App.Post("/app/api/batches", s.requireUser, s.requireCSRF, s.createUserBatch)
+	s.App.Post("/app/api/rules", s.requireUser, s.requireCSRF, s.createUserRule)
+	s.App.Post("/app/api/rules/:id/enable", s.requireUser, s.requireCSRF, s.enableUserRule)
+	s.App.Post("/app/api/rules/:id/disable", s.requireUser, s.requireCSRF, s.disableUserRule)
+	s.App.Post("/app/api/media", s.requireUser, s.requireCSRF, s.createMedia)
 
-	api := s.App.Group("/app/api", s.requireUser)
-	api.Get("/overview", s.appOverview)
-	api.Get("/launcher", s.launcherData)
-	api.Get("/campaigns", s.listUserCampaigns)
-	api.Get("/accounts/:id/stats", s.accountStats)
-	api.Get("/batches/:id", s.getUserBatch)
-	api.Get("/capabilities", s.userCapabilities)
-	api.Post("/connections/:id/sync", s.requireCSRF, s.syncUserConnection)
-	api.Delete("/connections/:id", s.requireCSRF, s.revokeUserConnection)
-	api.Post("/batches", s.requireCSRF, s.createUserBatch)
-	api.Patch("/guards/:id", s.requireCSRF, s.updateUserGuard)
-	api.Post("/campaigns/:id/guard", s.requireCSRF, s.createCampaignGuard)
-	api.Post("/campaigns/:id/pause", s.requireCSRF, s.pauseUserCampaign)
-	api.Post("/campaigns/:id/resume", s.requireCSRF, s.resumeUserCampaign)
-	api.Post("/media", s.requireCSRF, s.createMedia)
+	// /v1 is now user-scoped: a session cookie or a per-user API key both
+	// produce a Principal, and every list query is restricted to that
+	// principal's tenant. Cross-tenant reads live under /v1/admin.
+	v1 := s.App.Group("/v1", s.authenticatePrincipal, s.requireCSRFForSessions)
+	v1.Post("/oauth/sessions", s.startOAuth)
+	v1.Get("/connections", s.listConnections)
+	v1.Get("/connections/:id", s.getConnection)
+	v1.Delete("/connections/:id", s.revokeConnection)
+	v1.Post("/connections/:id/sync", s.syncConnection)
+	v1.Get("/ad-accounts", s.listAdAccounts)
+	v1.Get("/ad-accounts/:id/campaign-audit", s.auditAdAccount)
+	v1.Get("/assets", s.listAssets)
+	v1.Get("/assets/:id/posts", s.auditPagePosts)
+	v1.Post("/media", s.createMedia)
+	v1.Get("/media", s.listMedia)
+	v1.Get("/media/:id", s.getMedia)
+	v1.Post("/batches", s.createBatch)
+	v1.Get("/batches", s.listBatches)
+	v1.Get("/batches/:id", s.getBatch)
+	v1.Get("/batches/:id/results", s.listBatchResults)
+	v1.Get("/published-objects", s.listPublishedObjects)
+	v1.Post("/rules", s.createRule)
+	v1.Get("/rules", s.listRules)
+	v1.Get("/rules/:id", s.getRule)
+	v1.Patch("/rules/:id", s.updateRule)
+	v1.Post("/rules/:id/enable", s.enableRule)
+	v1.Post("/rules/:id/disable", s.disableRule)
+	v1.Get("/rules/:id/evaluations", s.listRuleEvaluations)
+	v1.Get("/insights", s.listInsights)
+	v1.Get("/jobs", s.listJobs)
+	v1.Get("/jobs/:id", s.getJob)
+	v1.Get("/capabilities", s.capabilities)
+	v1.Get("/me", s.currentUser)
+	v1.Get("/launch/accounts", s.listLaunchAccounts)
+	v1.Get("/launch/templates", s.listLaunchTemplates)
+	v1.Post("/launch/preview", s.previewLaunch)
+	v1.Post("/launch", s.launch)
+	v1.Post("/batches/:id/stop", s.stopBatch)
+	v1.Get("/ad-entities", s.listAdEntities)
+	v1.Get("/insights/daily", s.listDailyInsights)
+	v1.Post("/api-keys", s.createAPIKey)
+	v1.Get("/api-keys", s.listAPIKeys)
+	v1.Delete("/api-keys/:id", s.revokeAPIKey)
+
+	// Cross-tenant. requireAdmin gates the group, and each handler builds an
+	// explicit AdminScope rather than inheriting one.
+	admin := v1.Group("/admin", s.requireAdmin)
+	admin.Get("/users", s.adminListUsers)
+	admin.Get("/connections", s.adminListConnections)
+	admin.Get("/ad-accounts", s.adminListAdAccounts)
+	admin.Get("/insights/daily", s.adminListDailyInsights)
+	admin.Get("/rate-limits", s.adminRateLimits)
 }
 
 func (s *Server) requestID(c fiber.Ctx) error {
@@ -180,6 +239,20 @@ func isSafeRequestID(value string) bool {
 	return true
 }
 
+func (s *Server) authenticate(c fiber.Ctx) error {
+	header := strings.TrimSpace(c.Get("Authorization"))
+	scheme, credential, ok := strings.Cut(header, " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return application.ErrUnauthorized
+	}
+	credential = strings.TrimSpace(credential)
+	provided := sha256.Sum256([]byte(credential))
+	if subtle.ConstantTimeCompare(provided[:], s.token[:]) != 1 {
+		return application.ErrUnauthorized
+	}
+	return c.Next()
+}
+
 func (s *Server) closeConnectionOnBodyError(c fiber.Ctx) error {
 	err := c.Next()
 	if err != nil && requestHasBody(c.Request()) {
@@ -209,16 +282,27 @@ func (s *Server) handleError(c fiber.Ctx, err error) error {
 		status, code, message = http.StatusBadRequest, "invalid_request", validation.Error()
 		details = map[string]any{"field": validation.Field}
 	case errors.Is(err, application.ErrUnauthorized):
-		status, code, message = http.StatusUnauthorized, "unauthorized", "sign in to continue"
+		status, code, message = http.StatusUnauthorized, "unauthorized", "valid bearer credentials are required"
+		c.Set("WWW-Authenticate", `Bearer realm="raze-posting"`)
 	case errors.Is(err, application.ErrInvalidCredentials):
-		status, code, message = http.StatusUnauthorized, "invalid_credentials", "invalid login or password"
+		status, code, message = http.StatusUnauthorized, "invalid_credentials", "invalid credentials"
+	case errors.Is(err, application.ErrAccountDisabled):
+		status, code, message = http.StatusForbidden, "account_disabled", "this account is disabled"
+	case errors.Is(err, application.ErrForbidden):
+		status, code, message = http.StatusForbidden, "forbidden", "this action requires elevated privileges"
 	case errors.Is(err, application.ErrSessionExpired):
 		status, code, message = http.StatusUnauthorized, "session_expired", "sign in to continue"
 	case errors.Is(err, database.ErrOAuthSessionUnavailable):
 		status, code, message = http.StatusBadRequest, "oauth_session_unavailable", "OAuth session is missing, expired, or already used"
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		status, code, message = http.StatusNotFound, "not_found", "resource not found"
-	case errors.Is(err, gorm.ErrDuplicatedKey), errors.Is(err, application.ErrConflict):
+	case errors.Is(err, application.ErrConflict):
+		// The application's own conflicts carry a caller-safe message; the
+		// bare ORM error does not and must stay generic. Strip the sentinel
+		// prefix so the caller sees the message, not the wrapping.
+		status, code, message = http.StatusConflict, "conflict",
+			strings.TrimPrefix(err.Error(), application.ErrConflict.Error()+": ")
+	case errors.Is(err, gorm.ErrDuplicatedKey):
 		status, code, message = http.StatusConflict, "conflict", "resource conflicts with an existing record"
 	case errors.Is(err, storage.ErrFileTooLarge):
 		status, code, message = http.StatusRequestEntityTooLarge, "file_too_large", "uploaded file exceeds the 1 GiB limit"

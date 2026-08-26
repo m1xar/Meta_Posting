@@ -278,6 +278,14 @@ func (query InsightQuery) values() (url.Values, error) {
 		values.Set("action_breakdowns", strings.Join(query.ActionBreakdowns, ","))
 	}
 	if len(query.ActionAttributionWindows) > 0 {
+		// Meta rejects a query that both asks for the unified setting and
+		// names explicit windows. Failing here turns a confusing upstream
+		// (#100) into an error that names the actual mistake.
+		if query.UseUnifiedAttributionSetting != nil && *query.UseUnifiedAttributionSetting {
+			return nil, errors.New(
+				"meta: use_unified_attribution_setting and action_attribution_windows are mutually exclusive",
+			)
+		}
 		if err := setJSONQuery(values, "action_attribution_windows", query.ActionAttributionWindows); err != nil {
 			return nil, err
 		}
@@ -306,4 +314,74 @@ func setJSONQuery(values url.Values, key string, value any) error {
 	}
 	values.Set(key, string(encoded))
 	return nil
+}
+
+// account_currency lets a stored row record the currency its spend is
+// denominated in without a second lookup, which matters as soon as one user
+// holds accounts in more than one currency.
+const insightFieldAccountCurrency = "account_currency"
+
+// AccountInsightFields extends the default set with fields that describe the
+// buy itself. Valid at every level, but only worth requesting where the
+// answer varies.
+var AccountInsightFields = append(
+	append([]string(nil), DefaultInsightFields...),
+	insightFieldAccountCurrency,
+	"objective",
+	"buying_type",
+)
+
+// ExtendedInsightFields adds video, canvas and unique-* metrics. NOT used by
+// default: Meta rejects an entire query with (#100) when one field is invalid
+// for the requested level, so an unverified field here would stop ingestion
+// rather than degrade it. Phase 5's field audit promotes fields into the
+// default sets once confirmed against the live Graph version.
+var ExtendedInsightFields = append(
+	append([]string(nil), AccountInsightFields...),
+	"video_p25_watched_actions",
+	"video_p50_watched_actions",
+	"video_p75_watched_actions",
+	"video_p95_watched_actions",
+	"video_p100_watched_actions",
+	"video_continuous_2_sec_watched_actions",
+	"video_30_sec_watched_actions",
+	"cost_per_thruplay",
+	"inline_post_engagement",
+	"cost_per_inline_post_engagement",
+	"social_spend",
+	"unique_actions",
+	"unique_outbound_clicks",
+	"unique_link_clicks_ctr",
+	"cost_per_unique_outbound_click",
+	"estimated_ad_recallers",
+	"estimated_ad_recall_rate",
+	"full_view_impressions",
+	"full_view_reach",
+)
+
+// WindowedInsightFields is the minimal set for a deduplicated-reach query.
+// Kept small on purpose: this query runs per level per account per night, and
+// only reach, frequency and their denominators cannot be derived from the
+// daily rows.
+var WindowedInsightFields = []string{
+	"account_id",
+	"campaign_id",
+	"adset_id",
+	"ad_id",
+	"date_start",
+	"date_stop",
+	"reach",
+	"frequency",
+	"impressions",
+	"spend",
+}
+
+// FieldsForLevel returns the field set to request at a given level.
+func FieldsForLevel(level InsightLevel) []string {
+	switch level {
+	case InsightLevelAccount, InsightLevelCampaign:
+		return AccountInsightFields
+	default:
+		return append(append([]string(nil), DefaultInsightFields...), insightFieldAccountCurrency)
+	}
 }

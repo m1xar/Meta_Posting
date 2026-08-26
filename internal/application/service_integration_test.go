@@ -9,10 +9,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	platformcrypto "github.com/watchers-factory/raze-posting/internal/platform/crypto"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	platformcrypto "github.com/watchers-factory/raze-ads/internal/platform/crypto"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
 )
 
 func TestAccessTokenExpiryAndGraph190MarkConnectionExpired(t *testing.T) {
@@ -46,6 +46,7 @@ func TestAccessTokenExpiryAndGraph190MarkConnectionExpired(t *testing.T) {
 		encrypted, encryptErr := cipher.Encrypt([]byte("secret-token"), []byte(metaUserID))
 		require.NoError(t, encryptErr)
 		connection := &domain.MetaConnection{
+			UserID:                newTestUser(t, ctx, repositories),
 			MetaUserID:            metaUserID,
 			DisplayName:           "Expiry test",
 			Status:                domain.MetaConnectionActive,

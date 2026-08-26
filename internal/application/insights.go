@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	insightmetrics "github.com/watchers-factory/raze-posting/internal/metrics"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/rules"
 )
 
 const (
@@ -45,9 +45,47 @@ func (s *Service) CollectInsights(ctx context.Context, connectionID uuid.UUID) e
 	}
 	now := s.Now()
 	var failures []error
+
+	// The inventory sweep already knows the status of every object in these
+	// accounts, so prefer it over a Graph request per object. Only objects
+	// absent from the inventory - typically ones published since the last
+	// sweep - still cost a call, which keeps freshness for new objects
+	// without paying N requests an hour for the rest.
+	inventoryStatuses, inventoryErr := s.Repos.AdEntities.EffectiveStatusesForConnection(ctx, connectionID)
+	if inventoryErr != nil {
+		failures = append(failures, fmt.Errorf("load entity statuses: %w", inventoryErr))
+		inventoryStatuses = nil
+	}
+
 	for index := range objects {
 		object := &objects[index]
 		if !publishedStatusRefreshDue(object.LastSyncedAt, now) {
+			continue
+		}
+		if status, ok := inventoryStatuses[object.MetaObjectID]; ok {
+			if status != object.EffectiveStatus {
+				if err := s.Repos.Batches.UpdatePublishedStatus(
+					ctx,
+					object.ID,
+					status,
+					domain.MustJSON(map[string]string{
+						"effective_status": status,
+						"source":           "ad_entities",
+					}),
+					now,
+				); err != nil {
+					failures = append(failures, fmt.Errorf("store %s status: %w", object.MetaObjectID, err))
+					continue
+				}
+				object.EffectiveStatus = status
+				object.LastSyncedAt = &now
+				continue
+			}
+			if err := s.Repos.Batches.MarkPublishedStatusChecked(ctx, object.ID, now); err != nil {
+				failures = append(failures, fmt.Errorf("store %s status check: %w", object.MetaObjectID, err))
+				continue
+			}
+			object.LastSyncedAt = &now
 			continue
 		}
 		statusResult, statusErr := s.Meta.GetEntityStatus(ctx, token, object.MetaObjectID)
@@ -392,7 +430,7 @@ func insightSnapshot(
 		if err != nil {
 			return domain.InsightSnapshot{}, err
 		}
-		flattened, err := insightmetrics.FlattenInsightsJSON(encoded)
+		flattened, err := rules.FlattenInsightsJSON(encoded)
 		if err != nil {
 			return domain.InsightSnapshot{}, err
 		}
@@ -406,7 +444,7 @@ func insightSnapshot(
 			dateStop = parsed
 		}
 	}
-	metrics = insightmetrics.WithDerivedMetrics(metrics)
+	metrics = rules.WithDerivedMetrics(metrics)
 	if dateStart.IsZero() {
 		dateStart = truncateDate(object.CreatedAt)
 	}

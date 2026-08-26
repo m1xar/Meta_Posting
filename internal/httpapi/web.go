@@ -1,40 +1,45 @@
 package httpapi
 
 import (
-	"embed"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/application"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/application"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/rules"
 )
 
-//go:embed webui
-var webUI embed.FS
-
-type credentialsRequest struct {
-	Login    string `json:"login"`
+type registerRequest struct {
+	Email    string `json:"email"`
+	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
-type createUserBatchRequest struct {
-	Batch       application.CreateBatchRequest `json:"batch"`
-	Checkpoints []application.GuardCheckpoint  `json:"checkpoints,omitempty"`
-	GuardName   string                         `json:"guard_name,omitempty"`
+// loginRequest takes one identifier, which may be an email or a username.
+type loginRequest struct {
+	Identifier string `json:"identifier"`
+	Password   string `json:"password"`
 }
 
-type updateGuardRequest = application.UpdateGuardRequest
+type createUserBatchRequest struct {
+	Batch             application.CreateBatchRequest `json:"batch"`
+	AutoStopSpend     float64                        `json:"auto_stop_spend,omitempty"`
+	RuleLookbackHours int64                          `json:"rule_lookback_hours,omitempty"`
+}
 
 func (s *Server) registerUser(c fiber.Ctx) error {
-	var request credentialsRequest
+	var request registerRequest
 	if err := decodeJSON(c, &request); err != nil {
 		return err
 	}
-	session, err := s.service.RegisterUser(c.Context(), request.Login, request.Password)
+	session, err := s.service.RegisterUser(c.Context(), application.RegisterRequest{
+		Email:    request.Email,
+		Username: request.Username,
+		Password: request.Password,
+	})
 	if err != nil {
 		return err
 	}
@@ -43,11 +48,11 @@ func (s *Server) registerUser(c fiber.Ctx) error {
 }
 
 func (s *Server) loginUser(c fiber.Ctx) error {
-	var request credentialsRequest
+	var request loginRequest
 	if err := decodeJSON(c, &request); err != nil {
 		return err
 	}
-	session, err := s.service.LoginUser(c.Context(), request.Login, request.Password)
+	session, err := s.service.LoginUser(c.Context(), request.Identifier, request.Password)
 	if err != nil {
 		return err
 	}
@@ -66,12 +71,17 @@ func (s *Server) logoutUser(c fiber.Ctx) error {
 func (s *Server) requireUser(c fiber.Ctx) error {
 	session, err := s.service.AuthenticateUserSession(c.Context(), c.Cookies(userSessionCookie))
 	if err != nil {
-		if strings.HasPrefix(c.Path(), "/app") && !strings.HasPrefix(c.Path(), "/app/api") {
-			return c.Redirect().To("/login")
-		}
 		return err
 	}
 	c.Locals(userSessionLocal, session)
+	// Populate a Principal too, so handlers shared with /v1 - notably the
+	// media ownership check - see the same shape whichever route reached them.
+	c.Locals(principalLocal, Principal{
+		UserID:    session.User.ID,
+		Role:      session.User.Role,
+		Kind:      PrincipalSession,
+		SessionID: session.SessionID,
+	})
 	return c.Next()
 }
 
@@ -130,153 +140,7 @@ func (s *Server) startUserOAuthRedirect(c fiber.Ctx) error {
 	return c.Redirect().To(result.AuthorizationURL)
 }
 
-// campaignView is one campaign row for the UI: the published object joined
-// with its latest lifetime insights, tracker roll-up, guard, and checks.
-type campaignView struct {
-	Campaign domain.PublishedObject  `json:"campaign"`
-	Insights *domain.InsightSnapshot `json:"insights,omitempty"`
-	Tracker  *domain.TrackerStat     `json:"tracker,omitempty"`
-	Guard    *domain.CampaignGuard   `json:"guard,omitempty"`
-	Checks   []domain.GuardCheck     `json:"checks,omitempty"`
-}
-
-type campaignTotals struct {
-	Campaigns      int     `json:"campaigns"`
-	Live           int     `json:"live"`
-	Paused         int     `json:"paused"`
-	Spend          float64 `json:"spend"`
-	Clicks         int64   `json:"clicks"`
-	Impressions    int64   `json:"impressions"`
-	TrackerClicks  int64   `json:"tracker_clicks"`
-	TrackerLeads   float64 `json:"tracker_leads"`
-	TrackerSales   float64 `json:"tracker_sales"`
-	TrackerRevenue float64 `json:"tracker_revenue"`
-}
-
-func (s *Server) userCampaignViews(c fiber.Ctx, userID uuid.UUID) ([]campaignView, campaignTotals, error) {
-	totals := campaignTotals{}
-	campaigns, err := s.service.Repos.Users.ListCampaigns(c.Context(), userID, 500)
-	if err != nil {
-		return nil, totals, err
-	}
-	objectIDs := make([]uuid.UUID, 0, len(campaigns))
-	for _, campaign := range campaigns {
-		objectIDs = append(objectIDs, campaign.ID)
-	}
-	snapshots, err := s.service.Repos.Insights.LatestForObjects(c.Context(), objectIDs)
-	if err != nil {
-		return nil, totals, err
-	}
-	trackerStats, err := s.service.Repos.Tracker.ListForObjects(c.Context(), objectIDs)
-	if err != nil {
-		return nil, totals, err
-	}
-	checks, err := s.service.Repos.Guards.ListChecksForObjects(c.Context(), objectIDs)
-	if err != nil {
-		return nil, totals, err
-	}
-	guards, err := s.service.Repos.Users.ListGuards(c.Context(), userID, 200)
-	if err != nil {
-		return nil, totals, err
-	}
-
-	snapshotByObject := make(map[uuid.UUID]*domain.InsightSnapshot, len(snapshots))
-	for index := range snapshots {
-		if snapshots[index].PublishedObjectID != nil {
-			snapshotByObject[*snapshots[index].PublishedObjectID] = &snapshots[index]
-		}
-	}
-	trackerByObject := make(map[uuid.UUID]*domain.TrackerStat, len(trackerStats))
-	for index := range trackerStats {
-		if trackerStats[index].PublishedObjectID != nil {
-			trackerByObject[*trackerStats[index].PublishedObjectID] = &trackerStats[index]
-		}
-	}
-	checksByObject := make(map[uuid.UUID][]domain.GuardCheck)
-	for _, check := range checks {
-		checksByObject[check.PublishedObjectID] = append(checksByObject[check.PublishedObjectID], check)
-	}
-	guardByBatch := make(map[uuid.UUID]*domain.CampaignGuard)
-	guardByObject := make(map[uuid.UUID]*domain.CampaignGuard)
-	for index := range guards {
-		guard := &guards[index]
-		if guard.PublishedObjectID != nil {
-			guardByObject[*guard.PublishedObjectID] = guard
-		} else if guard.BatchID != nil {
-			if _, exists := guardByBatch[*guard.BatchID]; !exists {
-				guardByBatch[*guard.BatchID] = guard
-			}
-		}
-	}
-
-	views := make([]campaignView, 0, len(campaigns))
-	for index := range campaigns {
-		campaign := campaigns[index]
-		view := campaignView{Campaign: campaign}
-		view.Insights = snapshotByObject[campaign.ID]
-		view.Tracker = trackerByObject[campaign.ID]
-		view.Checks = checksByObject[campaign.ID]
-		if guard, ok := guardByObject[campaign.ID]; ok {
-			view.Guard = guard
-		} else if guard, ok := guardByBatch[campaign.BatchID]; ok {
-			view.Guard = guard
-		}
-		views = append(views, view)
-
-		totals.Campaigns++
-		switch campaign.EffectiveStatus {
-		case "ACTIVE", "IN_PROCESS", "WITH_ISSUES":
-			totals.Live++
-		case "PAUSED", "CAMPAIGN_PAUSED":
-			totals.Paused++
-		}
-		if view.Insights != nil {
-			totals.Spend += view.Insights.Spend
-			totals.Clicks += view.Insights.Clicks
-			totals.Impressions += view.Insights.Impressions
-		}
-		if view.Tracker != nil {
-			totals.TrackerClicks += view.Tracker.Clicks
-			totals.TrackerLeads += view.Tracker.Leads
-			totals.TrackerSales += view.Tracker.Sales
-			totals.TrackerRevenue += view.Tracker.Revenue
-		}
-	}
-	return views, totals, nil
-}
-
 func (s *Server) appOverview(c fiber.Ctx) error {
-	session, err := currentUserSession(c)
-	if err != nil {
-		return err
-	}
-	connections, err := s.service.Repos.Users.ListConnections(c.Context(), session.User.ID)
-	if err != nil {
-		return err
-	}
-	accounts, err := s.service.Repos.Users.ListAdAccounts(c.Context(), session.User.ID, 500)
-	if err != nil {
-		return err
-	}
-	batches, err := s.service.Repos.Users.ListBatches(c.Context(), session.User.ID, 50)
-	if err != nil {
-		return err
-	}
-	views, totals, err := s.userCampaignViews(c, session.User.ID)
-	if err != nil {
-		return err
-	}
-	return jsonOK(c, http.StatusOK, fiber.Map{
-		"user":        session.User,
-		"connections": connections,
-		"ad_accounts": accounts,
-		"batches":     batches,
-		"campaigns":   views,
-		"totals":      totals,
-	})
-}
-
-func (s *Server) launcherData(c fiber.Ctx) error {
 	session, err := currentUserSession(c)
 	if err != nil {
 		return err
@@ -297,79 +161,13 @@ func (s *Server) launcherData(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return jsonOK(c, http.StatusOK, fiber.Map{
-		"user":         session.User,
-		"connections":  connections,
-		"ad_accounts":  accounts,
-		"assets":       assets,
-		"batches":      batches,
-		"capabilities": s.service.Capabilities(),
-	})
-}
-
-func (s *Server) listUserCampaigns(c fiber.Ctx) error {
-	session, err := currentUserSession(c)
+	automationRules, err := s.service.Repos.Users.ListRules(c.Context(), session.User.ID, 50)
 	if err != nil {
 		return err
-	}
-	views, totals, err := s.userCampaignViews(c, session.User.ID)
-	if err != nil {
-		return err
-	}
-	return jsonOK(c, http.StatusOK, fiber.Map{"user": session.User, "campaigns": views, "totals": totals})
-}
-
-func (s *Server) accountStats(c fiber.Ctx) error {
-	session, err := currentUserSession(c)
-	if err != nil {
-		return err
-	}
-	id, err := parseID(c.Params("id"), "id")
-	if err != nil {
-		return err
-	}
-	if err := s.service.Repos.Users.OwnsAdAccount(c.Context(), session.User.ID, id); err != nil {
-		return err
-	}
-	account, err := s.service.Repos.Inventory.GetAdAccount(c.Context(), id)
-	if err != nil {
-		return err
-	}
-	views, _, err := s.userCampaignViews(c, session.User.ID)
-	if err != nil {
-		return err
-	}
-	accountViews := make([]campaignView, 0)
-	totals := campaignTotals{}
-	for _, view := range views {
-		if view.Campaign.AdAccountID != id {
-			continue
-		}
-		accountViews = append(accountViews, view)
-		totals.Campaigns++
-		switch view.Campaign.EffectiveStatus {
-		case "ACTIVE", "IN_PROCESS", "WITH_ISSUES":
-			totals.Live++
-		case "PAUSED", "CAMPAIGN_PAUSED":
-			totals.Paused++
-		}
-		if view.Insights != nil {
-			totals.Spend += view.Insights.Spend
-			totals.Clicks += view.Insights.Clicks
-			totals.Impressions += view.Insights.Impressions
-		}
-		if view.Tracker != nil {
-			totals.TrackerClicks += view.Tracker.Clicks
-			totals.TrackerLeads += view.Tracker.Leads
-			totals.TrackerSales += view.Tracker.Sales
-			totals.TrackerRevenue += view.Tracker.Revenue
-		}
 	}
 	return jsonOK(c, http.StatusOK, fiber.Map{
-		"user":      session.User,
-		"account":   account,
-		"campaigns": accountViews,
-		"totals":    totals,
+		"user": session.User, "connections": connections, "ad_accounts": accounts, "assets": assets,
+		"batches": batches, "rules": automationRules,
 	})
 }
 
@@ -390,24 +188,6 @@ func (s *Server) syncUserConnection(c fiber.Ctx) error {
 		return err
 	}
 	return jsonOK(c, http.StatusAccepted, job)
-}
-
-func (s *Server) revokeUserConnection(c fiber.Ctx) error {
-	session, err := currentUserSession(c)
-	if err != nil {
-		return err
-	}
-	id, err := parseID(c.Params("id"), "id")
-	if err != nil {
-		return err
-	}
-	if err := s.service.Repos.Users.OwnsConnection(c.Context(), session.User.ID, id); err != nil {
-		return err
-	}
-	if err := s.service.RevokeConnection(c.Context(), id); err != nil {
-		return err
-	}
-	return noContent(c)
 }
 
 func (s *Server) createUserBatch(c fiber.Ctx) error {
@@ -432,188 +212,119 @@ func (s *Server) createUserBatch(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	var guard *domain.CampaignGuard
-	if len(request.Checkpoints) > 0 {
-		name := request.GuardName
-		if name == "" {
-			name = "Guard " + batch.Name
+	var rule *domain.AutomationRule
+	if request.AutoStopSpend > 0 {
+		lookbackHours := request.RuleLookbackHours
+		if lookbackHours <= 0 {
+			lookbackHours = 24
 		}
-		guard, err = s.service.CreateGuard(c.Context(), application.CreateGuardRequest{
+		rule, err = s.service.CreateRule(c.Context(), application.CreateRuleRequest{
 			ConnectionID: request.Batch.ConnectionID,
 			BatchID:      &batch.ID,
-			Name:         name,
-			Checkpoints:  request.Checkpoints,
+			Name:         "Auto-stop " + batch.Name,
+			Status:       domain.RuleActive,
+			ScopeLevel:   domain.InsightCampaign,
+			Action:       domain.RuleActionPause,
+			Conditions: rules.Group{Logic: rules.LogicAll, Conditions: []rules.Condition{{
+				Metric: "spend", Operator: rules.OperatorGTE, Threshold: request.AutoStopSpend,
+			}}},
+			LookbackSeconds:           lookbackHours * 3600,
+			EvaluationIntervalSeconds: 300,
 		})
 		if err != nil {
 			return err
 		}
 	}
-	return jsonOK(c, http.StatusAccepted, fiber.Map{"batch": batch, "guard": guard})
+	return jsonOK(c, http.StatusAccepted, fiber.Map{"batch": batch, "rule": rule})
 }
 
-func (s *Server) getUserBatch(c fiber.Ctx) error {
+func (s *Server) createUserRule(c fiber.Ctx) error {
 	session, err := currentUserSession(c)
 	if err != nil {
 		return err
 	}
-	id, err := parseID(c.Params("id"), "id")
-	if err != nil {
-		return err
-	}
-	if err := s.service.Repos.Users.OwnsBatch(c.Context(), session.User.ID, id); err != nil {
-		return err
-	}
-	batch, err := s.service.Repos.Batches.Get(c.Context(), id)
-	if err != nil {
-		return err
-	}
-	results, err := s.service.Repos.Batches.ListAccountResults(c.Context(), batchResultsFilter(id))
-	if err != nil {
-		return err
-	}
-	return jsonOK(c, http.StatusOK, fiber.Map{"batch": batch, "results": results})
-}
-
-func (s *Server) updateUserGuard(c fiber.Ctx) error {
-	session, err := currentUserSession(c)
-	if err != nil {
-		return err
-	}
-	id, err := parseID(c.Params("id"), "id")
-	if err != nil {
-		return err
-	}
-	if err := s.service.Repos.Users.OwnsGuard(c.Context(), session.User.ID, id); err != nil {
-		return err
-	}
-	var request updateGuardRequest
+	var request application.CreateRuleRequest
 	if err := decodeJSON(c, &request); err != nil {
 		return err
 	}
-	guard, err := s.service.UpdateGuard(c.Context(), id, request)
-	if err != nil {
+	if err := s.service.Repos.Users.OwnsConnection(c.Context(), session.User.ID, request.ConnectionID); err != nil {
 		return err
 	}
-	return jsonOK(c, http.StatusOK, guard)
-}
-
-func (s *Server) createCampaignGuard(c fiber.Ctx) error {
-	session, err := currentUserSession(c)
-	if err != nil {
-		return err
-	}
-	id, err := parseID(c.Params("id"), "id")
-	if err != nil {
-		return err
-	}
-	if err := s.service.Repos.Users.OwnsPublishedObject(c.Context(), session.User.ID, id); err != nil {
-		return err
-	}
-	var campaign domain.PublishedObject
-	if err := s.service.Repos.DB().WithContext(c.Context()).
-		Where("id = ? AND object_type = ?", id, domain.PublishedCampaign).
-		First(&campaign).Error; err != nil {
-		return err
-	}
-	var request updateGuardRequest
-	if err := decodeJSON(c, &request); err != nil {
-		return err
-	}
-	name := request.Name
-	if name == "" {
-		name = "Guard " + campaign.Name
-	}
-	guard, err := s.service.CreateGuard(c.Context(), application.CreateGuardRequest{
-		ConnectionID:      campaign.ConnectionID,
-		PublishedObjectID: &campaign.ID,
-		Name:              name,
-		Checkpoints:       request.Checkpoints,
-	})
-	if err != nil {
-		return err
-	}
-	return jsonOK(c, http.StatusCreated, guard)
-}
-
-func (s *Server) pauseUserCampaign(c fiber.Ctx) error  { return s.setUserCampaignStatus(c, true) }
-func (s *Server) resumeUserCampaign(c fiber.Ctx) error { return s.setUserCampaignStatus(c, false) }
-
-func (s *Server) setUserCampaignStatus(c fiber.Ctx, pause bool) error {
-	session, err := currentUserSession(c)
-	if err != nil {
-		return err
-	}
-	id, err := parseID(c.Params("id"), "id")
-	if err != nil {
-		return err
-	}
-	if err := s.service.Repos.Users.OwnsPublishedObject(c.Context(), session.User.ID, id); err != nil {
-		return err
-	}
-	campaign, err := s.service.SetCampaignStatus(c.Context(), id, pause)
-	if err != nil {
-		return err
-	}
-	return jsonOK(c, http.StatusOK, campaign)
-}
-
-func (s *Server) userCapabilities(c fiber.Ctx) error {
-	return jsonOK(c, http.StatusOK, s.service.Capabilities())
-}
-
-func (s *Server) loginPage(c fiber.Ctx) error    { return s.sendWebPage(c, "webui/auth.html") }
-func (s *Server) registerPage(c fiber.Ctx) error { return s.sendWebPage(c, "webui/auth.html") }
-
-func (s *Server) dashboardPage(c fiber.Ctx) error { return s.sendWebPage(c, "webui/dashboard.html") }
-func (s *Server) launcherPage(c fiber.Ctx) error  { return s.sendWebPage(c, "webui/launch.html") }
-func (s *Server) campaignsPage(c fiber.Ctx) error { return s.sendWebPage(c, "webui/campaigns.html") }
-func (s *Server) accountPage(c fiber.Ctx) error   { return s.sendWebPage(c, "webui/account.html") }
-
-func (s *Server) staticAsset(name, contentType string) fiber.Handler {
-	return func(c fiber.Ctx) error {
-		content, err := webUI.ReadFile(name)
-		if err != nil {
-			return fiber.ErrNotFound
+	if request.AdAccountID != nil {
+		if err := s.service.Repos.Users.OwnsAdAccount(c.Context(), session.User.ID, *request.AdAccountID); err != nil {
+			return err
 		}
-		c.Set("Content-Type", contentType)
-		c.Set("Cache-Control", "public, max-age=300")
-		return c.Status(http.StatusOK).Send(content)
 	}
-}
-
-func (s *Server) sendWebPage(c fiber.Ctx, name string) error {
-	content, err := webUI.ReadFile(name)
+	if request.BatchID != nil {
+		if err := s.service.Repos.Users.OwnsBatch(c.Context(), session.User.ID, *request.BatchID); err != nil {
+			return err
+		}
+	}
+	rule, err := s.service.CreateRule(c.Context(), request)
 	if err != nil {
-		return fiber.ErrNotFound
+		return err
 	}
-	c.Set("Content-Type", "text/html; charset=utf-8")
-	return c.Status(http.StatusOK).Send(content)
+	return jsonOK(c, http.StatusCreated, rule)
 }
 
-func userOwnsMediaContext(c fiber.Ctx, connectionID, adAccountID *uuid.UUID, service *application.Service) error {
+func (s *Server) enableUserRule(c fiber.Ctx) error {
+	return s.setUserRuleStatus(c, domain.RuleActive)
+}
+
+func (s *Server) disableUserRule(c fiber.Ctx) error {
+	return s.setUserRuleStatus(c, domain.RuleDisabled)
+}
+
+func (s *Server) setUserRuleStatus(c fiber.Ctx, status domain.RuleStatus) error {
 	session, err := currentUserSession(c)
 	if err != nil {
 		return err
+	}
+	id, err := parseID(c.Params("id"), "id")
+	if err != nil {
+		return err
+	}
+	if err := s.service.Repos.Users.OwnsRule(c.Context(), session.User.ID, id); err != nil {
+		return err
+	}
+	rule, err := s.service.SetRuleStatus(c.Context(), id, status)
+	if err != nil {
+		return err
+	}
+	return jsonOK(c, http.StatusOK, rule)
+}
+
+// userOwnsMediaContext verifies the caller may attach media to the named
+// connection or ad account.
+//
+// It previously returned nil - allow - when no session was present, on the
+// assumption that meant the internal bearer API. Once /v1 became user-scoped
+// that assumption turned into an authorization bypass: any authenticated user
+// could name another tenant's connection_id. A missing principal is now an
+// error, and only the tenantless internal token is waved through.
+func userOwnsMediaContext(c fiber.Ctx, connectionID, adAccountID *uuid.UUID, service *application.Service) error {
+	principal, err := currentPrincipal(c)
+	if err != nil {
+		return err
+	}
+	if !principal.HasTenant() {
+		if principal.Kind == PrincipalInternal {
+			return nil
+		}
+		return application.ErrUnauthorized
 	}
 	if connectionID == nil && adAccountID == nil {
 		return invalidField("connection_id", "is required for user uploads")
 	}
 	if connectionID != nil {
-		if err := service.Repos.Users.OwnsConnection(c.Context(), session.User.ID, *connectionID); err != nil {
+		if err := service.Repos.Users.OwnsConnection(c.Context(), principal.UserID, *connectionID); err != nil {
 			return err
 		}
 	}
 	if adAccountID != nil {
-		if err := service.Repos.Users.OwnsAdAccount(c.Context(), session.User.ID, *adAccountID); err != nil {
+		if err := service.Repos.Users.OwnsAdAccount(c.Context(), principal.UserID, *adAccountID); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func batchResultsFilter(batchID uuid.UUID) database.BatchAccountResultFilter {
-	return database.BatchAccountResultFilter{
-		BatchID: batchID,
-		Page:    domain.PageRequest{Limit: 500},
-	}
 }

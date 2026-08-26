@@ -1,19 +1,16 @@
 package application
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
 )
 
 type TreePublishResult struct {
@@ -277,7 +274,7 @@ func applyTreeMediaBindings(
 			}
 			uploaded[binding.MediaID] = replacement
 		}
-		if err := setCampaignTreeJSONPointer(tree, binding.Target, replacement); err != nil {
+		if err := setSpecJSONPointer(tree, binding.Target, replacement); err != nil {
 			return fmt.Errorf("apply media binding %s: %w", binding.Target, err)
 		}
 	}
@@ -396,25 +393,18 @@ func treeCheckpoint(
 	metaID string,
 	response domain.JSON,
 ) domain.PublishedObject {
-	desired := string(meta.StatusActive)
-	if plan.LeavePaused {
-		desired = string(meta.StatusPaused)
-	}
-	return domain.PublishedObject{
-		BatchID:              batch.ID,
-		BatchAccountResultID: accountResult.ID,
-		ConnectionID:         batch.ConnectionID,
-		AdAccountID:          accountResult.AdAccountID,
-		ObjectType:           input.ObjectType,
-		MetaObjectID:         metaID,
-		ParentMetaObjectID:   input.ParentID,
-		Name:                 input.Name,
-		DesiredStatus:        desired,
-		EffectiveStatus:      string(meta.StatusPaused),
-		IdempotencyKey:       input.Key,
-		RequestJSON:          domain.MustJSON(plan),
-		ResponseJSON:         response,
-	}
+	return publishedCheckpoint(
+		batch,
+		accountResult,
+		input.ObjectType,
+		metaID,
+		input.Name,
+		input.ParentID,
+		input.Key,
+		plan.LeavePaused,
+		domain.MustJSON(plan),
+		response,
+	)
 }
 
 func (s *Service) activateTreeObject(
@@ -502,12 +492,7 @@ func (s *Service) finishTreePublishFailure(
 	result.Success = false
 	result.FinishedAt = s.Now()
 	response := domain.MustJSON(result)
-	graphErr := metaAccessTokenError(cause)
-	code, subcode := "", ""
-	if graphErr != nil {
-		code = strconv.Itoa(graphErr.Code)
-		subcode = strconv.Itoa(graphErr.ErrorSubcode)
-	}
+	code, subcode := graphErrorCodes(metaAccessTokenError(cause))
 	if meta.IsRetryableError(cause) {
 		finishErr := s.Repos.Batches.RecordAccountRetry(
 			ctx,
@@ -638,62 +623,4 @@ func tagCampaignTree(tree *meta.CampaignTreeSpec, resultID uuid.UUID) {
 			)
 		}
 	}
-}
-
-func campaignTreeForAccount(
-	base meta.CampaignTreeSpec,
-	patch json.RawMessage,
-) (meta.CampaignTreeSpec, error) {
-	if len(bytes.TrimSpace(patch)) == 0 || bytes.Equal(bytes.TrimSpace(patch), []byte("null")) {
-		return base, nil
-	}
-	baseJSON, err := json.Marshal(base)
-	if err != nil {
-		return meta.CampaignTreeSpec{}, err
-	}
-	var destination map[string]any
-	if err := decodeJSONUseNumber(baseJSON, &destination); err != nil {
-		return meta.CampaignTreeSpec{}, err
-	}
-	var override map[string]any
-	if err := decodeJSONUseNumber(patch, &override); err != nil {
-		return meta.CampaignTreeSpec{}, err
-	}
-	deepMerge(destination, override)
-	merged, err := json.Marshal(destination)
-	if err != nil {
-		return meta.CampaignTreeSpec{}, err
-	}
-	var tree meta.CampaignTreeSpec
-	if err := json.Unmarshal(merged, &tree); err != nil {
-		return meta.CampaignTreeSpec{}, err
-	}
-	return tree, nil
-}
-
-func setCampaignTreeJSONPointer(
-	tree *meta.CampaignTreeSpec,
-	pointer string,
-	value string,
-) error {
-	encoded, err := json.Marshal(tree)
-	if err != nil {
-		return err
-	}
-	var document any
-	if err := decodeJSONUseNumber(encoded, &document); err != nil {
-		return err
-	}
-	tokens, err := jsonPointerTokens(pointer)
-	if err != nil {
-		return err
-	}
-	if err := setJSONPointerValue(document, tokens, value); err != nil {
-		return err
-	}
-	updated, err := json.Marshal(document)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(updated, tree)
 }

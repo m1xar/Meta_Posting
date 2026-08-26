@@ -573,3 +573,11 @@ func stringAnyMap(value any) (map[string]any, bool) {
 		return nil, false
 	}
 }
+
+// CampaignPayloadForTest exposes the campaign payload builder so callers can
+// assert what actually reaches Meta, rather than what a bare marshal of the
+// spec would produce. The two differ: Raw is merged and required defaults are
+// substituted here, not by encoding/json.
+func CampaignPayloadForTest(spec CampaignSpec) (map[string]any, error) {
+	return campaignPayload(spec)
+}

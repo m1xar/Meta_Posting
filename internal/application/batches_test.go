@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
 )
 
 func TestHierarchyForAccountDeepMergesOverride(t *testing.T) {
@@ -21,7 +21,7 @@ func TestHierarchyForAccountDeepMergesOverride(t *testing.T) {
 		"creative":{"raw":{"degrees_of_freedom_spec":{"creative_features_spec":{"standard_enhancements":{"enroll_status":"OPT_OUT"}}}}}
 	}`)
 
-	merged, err := hierarchyForAccount(base, patch)
+	merged, err := specForAccount(base, patch)
 	require.NoError(t, err)
 	require.Equal(t, int64(2500), merged.Campaign.DailyBudget)
 	require.Equal(t, 25, merged.AdSet.Targeting.AgeMin)
@@ -33,7 +33,7 @@ func TestSetHierarchyJSONPointerAddsMediaValue(t *testing.T) {
 	hierarchy := validHierarchy()
 	require.Empty(t, hierarchy.Creative.ObjectStorySpec.LinkData.ImageHash)
 
-	err := setHierarchyJSONPointer(
+	err := setSpecJSONPointer(
 		&hierarchy,
 		"/creative/object_story_spec/link_data/image_hash",
 		"meta-image-hash",
@@ -44,7 +44,7 @@ func TestSetHierarchyJSONPointerAddsMediaValue(t *testing.T) {
 
 func TestSetHierarchyJSONPointerRejectsMissingParent(t *testing.T) {
 	hierarchy := validHierarchy()
-	err := setHierarchyJSONPointer(&hierarchy, "/creative/asset_feed_spec/images/0/hash", "hash")
+	err := setSpecJSONPointer(&hierarchy, "/creative/asset_feed_spec/images/0/hash", "hash")
 	require.ErrorContains(t, err, "does not exist")
 }
 

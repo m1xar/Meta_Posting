@@ -14,10 +14,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
-	"github.com/watchers-factory/raze-posting/internal/platform/database"
-	"github.com/watchers-factory/raze-posting/internal/storage"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/platform/database"
+	"github.com/watchers-factory/raze-ads/internal/storage"
 	"gorm.io/gorm"
 )
 
@@ -40,6 +40,7 @@ func TestVideoUploadResponseLossReconcilesAndCheckpointsPerAccountPostgres(t *te
 
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
 	connection := &domain.MetaConnection{
+		UserID:                newTestUser(t, ctx, repositories),
 		MetaUserID:            "media-checkpoint-" + uuid.NewString(),
 		Status:                domain.MetaConnectionActive,
 		AccessTokenCiphertext: make([]byte, 17),

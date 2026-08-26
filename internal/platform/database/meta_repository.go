@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/domain"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -14,6 +14,7 @@ import (
 var ErrOAuthSessionUnavailable = errors.New("OAuth session is missing, expired, or already consumed")
 
 type MetaConnectionFilter struct {
+	Scope  Scope
 	UserID *uuid.UUID
 	Status *domain.MetaConnectionStatus
 	Search string
@@ -86,8 +87,14 @@ func (r *MetaConnectionRepository) FindByUserAndMetaUserID(ctx context.Context, 
 }
 
 func (r *MetaConnectionRepository) List(ctx context.Context, filter MetaConnectionFilter) (domain.Page[domain.MetaConnection], error) {
+	if !filter.Scope.Valid() {
+		return domain.Page[domain.MetaConnection]{}, ErrScopeRequired
+	}
 	page := filter.Page.Normalized()
-	query := r.db.WithContext(ctx).Model(&domain.MetaConnection{})
+	query := filter.Scope.ApplyUserColumn(
+		r.db.WithContext(ctx).Model(&domain.MetaConnection{}),
+		"meta_connections",
+	)
 	if filter.UserID != nil {
 		query = query.Where("user_id = ?", *filter.UserID)
 	}

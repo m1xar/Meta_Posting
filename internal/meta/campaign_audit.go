@@ -51,11 +51,42 @@ func (c *Client) AuditPagePosts(ctx context.Context, userAccessToken, pageID str
 	return CollectPages[map[string]any](ctx, c, pageID+"/posts", pageAccessToken, query)
 }
 
+// AdAccountAuditStatuses selects which objects each edge returns.
+//
+// The lists are per edge because Meta does not define the same
+// effective_status values everywhere: review states such as DISAPPROVED exist
+// only on ads, and sending one to /campaigns fails the whole request with
+// 100/1815001. An empty list omits the filter for that edge.
+type AdAccountAuditStatuses struct {
+	Campaigns []string
+	AdSets    []string
+	Ads       []string
+}
+
+// SameForAll applies one list to every edge. Convenient for callers that only
+// want ACTIVE, which every edge defines.
+func SameForAll(statuses []string) AdAccountAuditStatuses {
+	return AdAccountAuditStatuses{Campaigns: statuses, AdSets: statuses, Ads: statuses}
+}
+
+func statusQuery(base url.Values, statuses []string) (url.Values, error) {
+	query := cloneValues(base)
+	if len(statuses) == 0 {
+		return query, nil
+	}
+	encoded, err := json.Marshal(statuses)
+	if err != nil {
+		return nil, err
+	}
+	query.Set("effective_status", string(encoded))
+	return query, nil
+}
+
 func (c *Client) AuditAdAccount(
 	ctx context.Context,
 	accessToken string,
 	accountID string,
-	effectiveStatuses []string,
+	statuses AdAccountAuditStatuses,
 	limit int,
 ) (AdAccountCampaignAudit, error) {
 	if limit <= 0 || limit > 500 {
@@ -65,15 +96,11 @@ func (c *Client) AuditAdAccount(
 	baseQuery := url.Values{
 		"limit": {strconv.Itoa(limit)},
 	}
-	if len(effectiveStatuses) > 0 {
-		encoded, err := json.Marshal(effectiveStatuses)
-		if err != nil {
-			return AdAccountCampaignAudit{}, err
-		}
-		baseQuery.Set("effective_status", string(encoded))
-	}
 
-	campaignQuery := cloneValues(baseQuery)
+	campaignQuery, err := statusQuery(baseQuery, statuses.Campaigns)
+	if err != nil {
+		return AdAccountCampaignAudit{}, err
+	}
 	campaignQuery.Set("fields", strings.Join([]string{
 		"id", "name", "account_id", "objective", "buying_type",
 		"status", "configured_status", "effective_status",
@@ -82,14 +109,17 @@ func (c *Client) AuditAdAccount(
 		"bid_strategy", "spend_cap", "start_time", "stop_time",
 		"created_time", "updated_time", "issues_info",
 	}, ","))
-	campaigns, err := CollectPages[map[string]any](
+	campaigns, err := CollectPagesAdaptive[map[string]any](
 		ctx, c, "act_"+accountID+"/campaigns", accessToken, campaignQuery,
 	)
 	if err != nil {
 		return AdAccountCampaignAudit{}, err
 	}
 
-	adSetQuery := cloneValues(baseQuery)
+	adSetQuery, err := statusQuery(baseQuery, statuses.AdSets)
+	if err != nil {
+		return AdAccountCampaignAudit{}, err
+	}
 	adSetQuery.Set("fields", strings.Join([]string{
 		"id", "name", "account_id", "campaign_id",
 		"status", "configured_status", "effective_status",
@@ -100,14 +130,17 @@ func (c *Client) AuditAdAccount(
 		"start_time", "end_time", "created_time", "updated_time",
 		"learning_stage_info", "issues_info",
 	}, ","))
-	adSets, err := CollectPages[map[string]any](
+	adSets, err := CollectPagesAdaptive[map[string]any](
 		ctx, c, "act_"+accountID+"/adsets", accessToken, adSetQuery,
 	)
 	if err != nil {
 		return AdAccountCampaignAudit{}, err
 	}
 
-	adQuery := cloneValues(baseQuery)
+	adQuery, err := statusQuery(baseQuery, statuses.Ads)
+	if err != nil {
+		return AdAccountCampaignAudit{}, err
+	}
 	adQuery.Set("fields", strings.Join([]string{
 		"id", "name", "account_id", "campaign_id", "adset_id",
 		"status", "configured_status", "effective_status",
@@ -115,7 +148,7 @@ func (c *Client) AuditAdAccount(
 		"created_time", "updated_time", "issues_info",
 		"creative{id,name,object_story_id,effective_object_story_id,object_type,status,actor_id,instagram_actor_id,object_story_spec,asset_feed_spec,url_tags,thumbnail_url}",
 	}, ","))
-	ads, err := CollectPages[map[string]any](
+	ads, err := CollectPagesAdaptive[map[string]any](
 		ctx, c, "act_"+accountID+"/ads", accessToken, adQuery,
 	)
 	if err != nil {

@@ -6,8 +6,8 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/watchers-factory/raze-posting/internal/domain"
-	"github.com/watchers-factory/raze-posting/internal/meta"
+	"github.com/watchers-factory/raze-ads/internal/domain"
+	"github.com/watchers-factory/raze-ads/internal/meta"
 )
 
 func (s *Service) AuditPagePosts(ctx context.Context, assetID uuid.UUID, limit int) ([]map[string]any, error) {
@@ -51,7 +51,7 @@ func (s *Service) AuditAdAccount(
 		ctx,
 		token,
 		account.AccountID,
-		effectiveStatuses,
+		meta.SameForAll(effectiveStatuses),
 		limit,
 	)
 	if err != nil {
