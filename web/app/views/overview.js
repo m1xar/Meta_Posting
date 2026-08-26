@@ -22,6 +22,8 @@ export function overviewView() {
         try {
           const summary = await api.syncRefresh();
           toast(`Queued ${summary.jobs} sync job(s) for ${summary.accounts} account(s)`, 'ok');
+          wasSyncing = true;
+          pollSync();
         } catch (error) {
           toast(error.message, 'bad');
         } finally {
@@ -33,6 +35,7 @@ export function overviewView() {
     el('a', { class: 'button primary', href: '#/launcher' }, 'Launch campaigns')));
 
   const bannerBox = el('div', {});
+  const syncBox = el('div', {});
   const metricsBox = el('div', { class: 'metrics' }, skeleton('5.4rem'));
   const liveBox = el('section', { class: 'card panel' },
     el('header', {}, el('span', { class: 'label' }, 'Live campaigns'),
@@ -46,8 +49,48 @@ export function overviewView() {
     el('header', {}, el('span', { class: 'label' }, 'Ad accounts')),
     panelSkeleton(6));
 
-  container.append(bannerBox, metricsBox, liveBox,
+  container.append(bannerBox, syncBox, metricsBox, liveBox,
     el('div', { class: 'grid-2', style: 'align-items:start' }, connectionsBox, accountsBox));
+
+  // Live sync indicator: a large account discovery runs for minutes and only
+  // fills data at the end, so poll the tenant's in-flight sync jobs every 10s.
+  // When a sync that was running finishes, reload so the fresh inventory and
+  // metrics appear without the operator wondering whether anything happened.
+  let wasSyncing = false;
+  let syncTimer = null;
+  const renderSync = (jobs) => {
+    if (jobs > 0) {
+      syncBox.replaceChildren(el('div', {
+        class: 'card panel',
+        style: 'display:flex;align-items:center;gap:.7rem;border-color:var(--accent)',
+      },
+        el('span', { class: 'spinner' }),
+        el('div', {},
+          el('strong', {}, 'Идёт синхронизация с Meta…'),
+          el('span', { class: 'muted', style: 'display:block;font-size:.82rem' },
+            `${jobs} задач(и) в очереди — дискаверинг кабинетов, кампаний и инсайтов. Страница обновится сама, когда закончится.`))));
+    } else {
+      syncBox.replaceChildren();
+    }
+  };
+  const pollSync = async () => {
+    try {
+      const { syncing, jobs } = await api.syncStatus();
+      renderSync(jobs || 0);
+      if (wasSyncing && !syncing) {
+        // A sync just completed: pull the fresh data in.
+        wasSyncing = false;
+        clearInterval(syncTimer);
+        window.dispatchEvent(new Event('route:refresh'));
+        return;
+      }
+      wasSyncing = syncing;
+    } catch (_) { /* transient; keep polling */ }
+  };
+  pollSync();
+  syncTimer = setInterval(pollSync, 10000);
+  // Stop polling when navigating away from the dashboard.
+  window.addEventListener('hashchange', () => clearInterval(syncTimer), { once: true });
 
   const fail = (box, error) => box.append(el('div', { class: 'error' }, error.message));
 

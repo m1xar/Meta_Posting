@@ -629,3 +629,34 @@ func (s *Server) duplicateCampaign(c fiber.Ctx) error {
 	}
 	return jsonOK(c, http.StatusAccepted, result)
 }
+
+// syncStatus reports whether the tenant has inventory/insight sync jobs still
+// in flight, so the dashboard can show a live "syncing" indicator instead of
+// looking empty while a large account discovery runs.
+func (s *Server) syncStatus(c fiber.Ctx) error {
+	scope, err := scopeFor(c)
+	if err != nil {
+		return err
+	}
+	syncTypes := []string{
+		"sync_connection", "sync_ad_entities", "collect_account_insights",
+	}
+	query := s.service.Repos.DB().WithContext(c.Context()).
+		Model(&domain.Job{}).
+		Where("type IN ? AND status IN ?", syncTypes, []string{"pending", "running"})
+	// Jobs carry connection_id; restrict to the caller's connections.
+	if !scope.Admin {
+		query = query.Where(
+			"connection_id IN (SELECT id FROM meta_connections WHERE user_id = ?)",
+			scope.UserID,
+		)
+	}
+	var pending int64
+	if err := query.Count(&pending).Error; err != nil {
+		return err
+	}
+	return jsonOK(c, http.StatusOK, fiber.Map{
+		"syncing": pending > 0,
+		"jobs":    pending,
+	})
+}

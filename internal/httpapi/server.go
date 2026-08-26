@@ -193,6 +193,7 @@ func (s *Server) routes() {
 	v1.Get("/launch/templates", s.listLaunchTemplates)
 	v1.Get("/launch/templates/:id", s.getLaunchTemplate)
 	v1.Post("/sync/refresh", s.syncRefresh)
+	v1.Get("/sync/status", s.syncStatus)
 	v1.Post("/launch/preview", s.previewLaunch)
 	v1.Post("/launch", s.launch)
 	v1.Post("/batches/:id/stop", s.stopBatch)

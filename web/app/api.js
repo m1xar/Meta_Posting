@@ -84,6 +84,7 @@ export const api = {
   launchTemplates: (params) => request('GET', `/v1/launch/templates${query(params)}`),
   launchTemplate: (id) => request('GET', `/v1/launch/templates/${id}`),
   syncRefresh: () => request('POST', '/v1/sync/refresh', {}),
+  syncStatus: () => request('GET', '/v1/sync/status'),
   launchPreview: (payload) => request('POST', '/v1/launch/preview', payload),
   launch: (payload) => request('POST', '/v1/launch', payload),
 
