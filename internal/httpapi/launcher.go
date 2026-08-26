@@ -99,7 +99,7 @@ type launchTemplate struct {
 	BillingEvent   string      `json:"billing_event,omitempty"`
 	DailyBudget    int64       `json:"daily_budget_minor"`
 	LifetimeBudget int64       `json:"lifetime_budget_minor"`
-	Raw            domain.JSON `json:"raw"`
+	Raw            domain.JSON `json:"raw,omitempty"`
 	// Creative is the whole creative of one ad inside this ad set. The copy
 	// lives in different places depending on how the ad was built - a plain
 	// ad keeps it in object_story_spec, a flexible one in asset_feed_spec -
@@ -130,6 +130,8 @@ func (s *Server) listLaunchTemplates(c fiber.Ctx) error {
 		Scope:        scope,
 		Level:        &level,
 		MetaObjectID: strings.TrimSpace(c.Query("meta_object_id")),
+		Search:       strings.TrimSpace(c.Query("search")),
+		Light:        true,
 		Page:         domain.PageRequest{Limit: limit, Offset: offset},
 	}
 	if raw := strings.TrimSpace(c.Query("ad_account_id")); raw != "" {
@@ -144,39 +146,13 @@ func (s *Server) listLaunchTemplates(c fiber.Ctx) error {
 		return err
 	}
 
-	// One representative creative per ad set, fetched in a single query
-	// rather than per row.
-	creatives := map[string]domain.JSON{}
-	if len(page.Items) > 0 {
-		adSetIDs := make([]string, 0, len(page.Items))
-		for index := range page.Items {
-			adSetIDs = append(adSetIDs, page.Items[index].MetaObjectID)
-		}
-		var rows []struct {
-			AdSetMetaID string
-			Story       []byte
-		}
-		if err := s.service.Repos.DB().WithContext(c.Context()).Raw(`
-			SELECT DISTINCT ON (adset_meta_id)
-			       adset_meta_id AS ad_set_meta_id,
-			       raw_json->'creative' AS story
-			FROM ad_entities
-			WHERE level = 'ad'
-			  AND adset_meta_id IN ?
-			  AND raw_json->'creative' IS NOT NULL
-			ORDER BY adset_meta_id, last_seen_at DESC
-		`, adSetIDs).Scan(&rows).Error; err == nil {
-			for _, row := range rows {
-				creatives[row.AdSetMetaID] = domain.JSON(row.Story)
-			}
-		}
-	}
-
+	// The list stays light on purpose: identity and headline fields only.
+	// The full targeting tree and creative arrive from the detail endpoint
+	// once one template is actually picked.
 	items := make([]launchTemplate, 0, len(page.Items))
 	for index := range page.Items {
 		entity := &page.Items[index]
 		items = append(items, launchTemplate{
-			Creative:       creatives[entity.MetaObjectID],
 			ID:             entity.ID,
 			AdAccountID:    entity.AdAccountID,
 			MetaObjectID:   entity.MetaObjectID,
@@ -188,7 +164,6 @@ func (s *Server) listLaunchTemplates(c fiber.Ctx) error {
 			BillingEvent:   entity.BillingEvent,
 			DailyBudget:    entity.DailyBudget,
 			LifetimeBudget: entity.LifetimeBudget,
-			Raw:            entity.RawJSON,
 		})
 	}
 	return jsonOK(c, http.StatusOK, fiber.Map{
@@ -277,4 +252,68 @@ func (s *Server) stopBatch(c fiber.Ctx) error {
 		})
 	}
 	return jsonOK(c, http.StatusOK, fiber.Map{"result": result})
+}
+
+// getLaunchTemplate returns one ad set with its full raw targeting tree and a
+// representative creative - the heavy halves the list omits.
+func (s *Server) getLaunchTemplate(c fiber.Ctx) error {
+	scope, err := scopeFor(c)
+	if err != nil {
+		return err
+	}
+	id, err := parseID(c.Params("id"), "id")
+	if err != nil {
+		return err
+	}
+	var entity domain.AdEntity
+	query := s.service.Repos.DB().WithContext(c.Context()).Model(&domain.AdEntity{}).
+		Where("ad_entities.id = ? AND ad_entities.level = ?", id, domain.AdEntityAdSet)
+	if err := scope.Apply(query, "ad_entities").First(&entity).Error; err != nil {
+		return err
+	}
+	var creative struct{ Story []byte }
+	_ = s.service.Repos.DB().WithContext(c.Context()).Raw(`
+		SELECT raw_json->'creative' AS story
+		FROM ad_entities
+		WHERE level = 'ad'
+		  AND adset_meta_id = ?
+		  AND raw_json->'creative' IS NOT NULL
+		ORDER BY last_seen_at DESC
+		LIMIT 1
+	`, entity.MetaObjectID).Scan(&creative).Error
+	return jsonOK(c, http.StatusOK, launchTemplate{
+		ID:             entity.ID,
+		AdAccountID:    entity.AdAccountID,
+		MetaObjectID:   entity.MetaObjectID,
+		Name:           entity.Name,
+		CampaignMetaID: entity.CampaignMetaID,
+		Status:         entity.EffectiveStatus,
+		Objective:      entity.Objective,
+		Optimization:   entity.OptimizationGoal,
+		BillingEvent:   entity.BillingEvent,
+		DailyBudget:    entity.DailyBudget,
+		LifetimeBudget: entity.LifetimeBudget,
+		Raw:            entity.RawJSON,
+		Creative:       domain.JSON(creative.Story),
+	})
+}
+
+// syncRefresh queues an immediate data refresh for the caller's tenant.
+func (s *Server) syncRefresh(c fiber.Ctx) error {
+	principal, err := currentPrincipal(c)
+	if err != nil {
+		return err
+	}
+	if !principal.HasTenant() {
+		return application.ErrForbidden
+	}
+	var body struct{}
+	if err := decodeOptionalJSON(c, &body); err != nil {
+		return err
+	}
+	summary, err := s.service.RefreshUserData(c.Context(), principal.UserID)
+	if err != nil {
+		return err
+	}
+	return jsonOK(c, http.StatusAccepted, summary)
 }

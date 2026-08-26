@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -478,11 +479,59 @@ func (s *Server) listCampaignViews(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	limit, offset, err := pageRequest(c)
+	if err != nil {
+		return err
+	}
+	search := strings.ToLower(strings.TrimSpace(c.Query("search")))
+	statusFilter := strings.TrimSpace(c.Query("status"))
+	switch statusFilter {
+	case "", "live", "paused":
+	default:
+		return invalidField("status", "must be live or paused")
+	}
+
 	views, totals, err := s.campaignViews(c, adAccountID)
 	if err != nil {
 		return err
 	}
-	return jsonOK(c, http.StatusOK, fiber.Map{"campaigns": views, "totals": totals})
+	// The join is already in memory and cheap; filters and pages apply to it
+	// so totals describe the filtered set, not the visible page.
+	filtered := views[:0:0]
+	filteredTotals := campaignTotals{}
+	for _, view := range views {
+		if statusFilter == "live" && !campaignIsLive(view.Campaign.EffectiveStatus) {
+			continue
+		}
+		if statusFilter == "paused" && !campaignIsPaused(view.Campaign.EffectiveStatus) {
+			continue
+		}
+		if search != "" &&
+			!strings.Contains(strings.ToLower(view.Campaign.Name), search) &&
+			!strings.Contains(view.Campaign.MetaObjectID, search) {
+			continue
+		}
+		filtered = append(filtered, view)
+		filteredTotals.add(view)
+	}
+	if statusFilter == "" && search == "" {
+		filteredTotals = totals
+	}
+	total := len(filtered)
+	if offset > total {
+		offset = total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return jsonOK(c, http.StatusOK, fiber.Map{
+		"campaigns": filtered[offset:end],
+		"totals":    filteredTotals,
+		"total":     total,
+		"limit":     limit,
+		"offset":    offset,
+	})
 }
 
 func (s *Server) accountStats(c fiber.Ctx) error {

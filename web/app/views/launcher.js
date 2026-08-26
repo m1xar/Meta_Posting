@@ -43,10 +43,11 @@ const options = (pairs, selected) =>
 // --- view -------------------------------------------------------------------
 
 export async function launcherView() {
-  const [accounts, templates] = await Promise.all([
+  const [accounts, firstTemplates] = await Promise.all([
     api.launchAccounts(),
-    api.launchTemplates({ limit: 300 }),
+    api.launchTemplates({ limit: 50 }),
   ]);
+  let templates = firstTemplates;
 
   const container = el('div', {});
   const ready = (accounts.items || []).filter((a) => a.readiness.ready);
@@ -122,23 +123,34 @@ export async function launcherView() {
   // Ad set names repeat heavily on real accounts - the same concept is
   // replicated across dozens of campaigns - so the picker has to carry
   // enough context to tell two identically named ad sets apart.
-  const sourceSearch = el('input', { type: 'search', placeholder: 'Filter by name, account or ID' });
+  const sourceSearch = el('input', { type: 'search', placeholder: 'Search ad sets by name or ID (server-side)' });
   const sourceSelect = el('select', { size: '6', style: 'min-height:9rem' });
   const sourceNote = el('div', { style: 'font-size:.82rem;margin-top:.6rem;display:flex;gap:.3rem;align-items:center;flex-wrap:wrap' });
 
+  // The list is a light server-side page: identity fields only. The full
+  // targeting tree and creative are fetched when one ad set is picked.
   const renderSources = () => {
-    const term = sourceSearch.value.trim().toLowerCase();
-    const items = (templates.items || []).filter((t) => !term
-      || (t.name || '').toLowerCase().includes(term)
-      || (accountName.get(t.ad_account_id) || '').toLowerCase().includes(term)
-      || t.meta_object_id.includes(term));
-    sourceSelect.replaceChildren(...items.slice(0, 300).map((t) => el('option', {
-      value: t.meta_object_id,
-      selected: state.source && state.source.meta_object_id === t.meta_object_id,
+    sourceSelect.replaceChildren(...(templates.items || []).map((t) => el('option', {
+      value: t.id,
+      selected: state.source && state.source.id === t.id,
     }, `${t.name || 'unnamed'} · ${accountName.get(t.ad_account_id) || '?'} · ${t.effective_status || ''} · ${t.meta_object_id.slice(-6)}`)));
-    if (!state.source) sourceNote.textContent = `${items.length} of ${templates.total} ad sets — pick one to copy from`;
+    if (!state.source) sourceNote.textContent = `${(templates.items || []).length} of ${templates.total} ad sets — pick one to copy from`;
   };
-  sourceSearch.addEventListener('input', renderSources);
+  let sourceTimer = null;
+  sourceSearch.addEventListener('input', () => {
+    clearTimeout(sourceTimer);
+    sourceTimer = setTimeout(async () => {
+      const term = sourceSearch.value.trim();
+      sourceNote.textContent = 'Searching…';
+      try {
+        templates = await api.launchTemplates({ limit: 50, ...(term ? { search: term } : {}) });
+        state.source = null;
+        renderSources();
+      } catch (error) {
+        sourceNote.textContent = error.message;
+      }
+    }, 300);
+  });
 
   const campaignName = el('input', { type: 'text', placeholder: 'Spring prospecting' });
   const objective = el('select', {}, ...options(OBJECTIVES, 'OUTCOME_SALES'));
@@ -187,9 +199,17 @@ export async function launcherView() {
   });
   const urlTags = el('input', { type: 'text', placeholder: 'utm_source=meta&utm_campaign=...' });
 
-  sourceSelect.addEventListener('change', () => {
-    const template = (templates.items || []).find((t) => t.meta_object_id === sourceSelect.value);
-    if (!template) return;
+  sourceSelect.addEventListener('change', async () => {
+    const picked = (templates.items || []).find((t) => t.id === sourceSelect.value);
+    if (!picked) return;
+    sourceNote.textContent = 'Loading targeting and creative…';
+    let template;
+    try {
+      template = await api.launchTemplate(picked.id);
+    } catch (error) {
+      sourceNote.textContent = error.message;
+      return;
+    }
     state.source = template;
     // Fill every field the source can answer. Showing "Inherit from source"
     // in a dropdown while the real value stays hidden is the same as not

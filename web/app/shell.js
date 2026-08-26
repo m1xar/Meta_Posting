@@ -149,6 +149,37 @@ export function metric(label, value, note, unknown = false) {
   );
 }
 
+/** A block-level loading placeholder sized like the content it replaces. */
+export function skeleton(height = '2rem', width = '100%') {
+  return el('div', { class: 'skeleton', style: `height:${height};width:${width}` });
+}
+
+/** A panel's worth of skeleton rows, for sections that load independently. */
+export function panelSkeleton(rows = 4) {
+  const stack = el('div', { class: 'stack' });
+  for (let index = 0; index < rows; index++) {
+    stack.append(skeleton('1.1rem', `${92 - index * 7}%`));
+  }
+  return stack;
+}
+
+/** Offset pager: "‹ 51-100 of 320 ›". Calls onPage(newOffset). */
+export function pager(total, limit, offset, onPage) {
+  if (total <= limit) return null;
+  const from = Math.min(offset + 1, total);
+  const to = Math.min(offset + limit, total);
+  const button = (label, target, enabled) => el('button', {
+    class: 'button small',
+    ...(enabled ? {} : { disabled: true }),
+    onclick: () => onPage(target),
+  }, label);
+  return el('div', { class: 'row-between', style: 'margin-top:.8rem;align-items:center' },
+    el('span', { class: 'muted', style: 'font-size:.8rem' }, `${from}–${to} of ${total}`),
+    el('div', { style: 'display:flex;gap:.4rem' },
+      button('‹ Prev', Math.max(0, offset - limit), offset > 0),
+      button('Next ›', offset + limit, to < total)));
+}
+
 export function table(columns, rows) {
   if (!rows.length) return null;
   return el('div', { class: 'table-wrap' },

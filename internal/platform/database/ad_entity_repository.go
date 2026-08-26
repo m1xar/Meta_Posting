@@ -21,9 +21,12 @@ type AdEntityFilter struct {
 	AdSetMetaID     string
 	MetaObjectID    string
 	EffectiveStatus string
+	Search          string
 	IncludeGone     bool
 	OwnedOnly       bool
-	Page            domain.PageRequest
+	// Light drops the raw Graph payload from the select for list surfaces.
+	Light bool
+	Page  domain.PageRequest
 }
 
 type AdEntityRepository struct {
@@ -138,6 +141,10 @@ func (r *AdEntityRepository) List(
 	if filter.EffectiveStatus != "" {
 		query = query.Where("effective_status = ?", filter.EffectiveStatus)
 	}
+	if filter.Search != "" {
+		pattern := "%" + filter.Search + "%"
+		query = query.Where("name ILIKE ? OR meta_object_id LIKE ?", pattern, pattern)
+	}
 	if !filter.IncludeGone {
 		query = query.Where("disappeared_at IS NULL")
 	}
@@ -150,6 +157,11 @@ func (r *AdEntityRepository) List(
 		return domain.Page[domain.AdEntity]{}, err
 	}
 	var items []domain.AdEntity
+	if filter.Light {
+		// Everything but the raw Graph payload: a few hundred templates with
+		// their full targeting trees is tens of megabytes nobody scrolls.
+		query = query.Select("id, created_at, updated_at, connection_id, ad_account_id, level, meta_object_id, parent_meta_object_id, campaign_meta_id, adset_meta_id, name, status, configured_status, effective_status, objective, buying_type, optimization_goal, billing_event, destination_type, bid_strategy, daily_budget, lifetime_budget, budget_remaining, bid_amount, spend_cap, start_time, stop_time, meta_created_time, meta_updated_time, published_object_id, is_owned")
+	}
 	ordered := query.Order("level ASC, name ASC, meta_object_id ASC")
 	if err := applyPage(ordered, page.Limit, page.Offset).Find(&items).Error; err != nil {
 		return domain.Page[domain.AdEntity]{}, err
