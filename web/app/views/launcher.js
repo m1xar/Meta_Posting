@@ -176,7 +176,12 @@ export async function launcherView() {
   state.adSetMode = 'new';
   const adSetModeNew = el('input', { type: 'radio', name: 'adset-mode', value: 'new', checked: true, style: 'width:auto' });
   const adSetModeExisting = el('input', { type: 'radio', name: 'adset-mode', value: 'existing', style: 'width:auto' });
-  const sourceLabel = el('span', {}, 'Source ad set (targeting)');
+  const sourceLabel = el('span', {}, 'Существующий ад-сет');
+  const sourceBlock = el('div', { class: 'stack', style: 'margin:.2rem 0 1rem;display:none' },
+    el('span', { class: 'label' }, sourceLabel),
+    el('p', { style: 'font-size:.82rem;margin:.2rem 0 .5rem' },
+      'Из выбранного ад-сета берутся таргетинг, пиксель, биллинг и бюджет — всё как есть. Имена повторяются между кабинетами, поэтому в строке видны кабинет и последние цифры ID.'),
+    sourceSearch, sourceSelect, sourceNote);
   // Manual targeting for a from-scratch ad set.
   const tgCountries = el('input', { type: 'text', placeholder: 'DE, AT, CH' });
   const tgAgeMin = el('input', { type: 'number', min: '13', max: '65', value: '18' });
@@ -336,9 +341,11 @@ export async function launcherView() {
 
   const applyAdSetMode = () => {
     const existing = state.adSetMode === 'existing';
+    sourceBlock.style.display = existing ? '' : 'none';
     adSetFieldsBlock.style.display = existing ? 'none' : '';
     adSetExistingNote.style.display = existing ? '' : 'none';
-    sourceLabel.textContent = existing ? 'Существующий ад-сет (обязательно)' : 'Источник таргетинга (опционально — или заполни поля ниже)';
+    // A from-scratch ad set has no source to inherit from.
+    if (!existing) state.source = null;
   };
   adSetModeNew.addEventListener('change', () => { state.adSetMode = 'new'; applyAdSetMode(); });
   adSetModeExisting.addEventListener('change', () => { state.adSetMode = 'existing'; applyAdSetMode(); });
@@ -442,11 +449,7 @@ export async function launcherView() {
     el('div', { class: 'mode-toggle' },
       el('label', { class: 'mode-option' }, adSetModeNew, el('span', {}, 'Новый ад-сет')),
       el('label', { class: 'mode-option' }, adSetModeExisting, el('span', {}, 'Существующий ад-сет'))),
-    el('div', { class: 'stack', style: 'margin:.2rem 0 1rem' },
-      el('span', { class: 'label' }, sourceLabel),
-      el('p', { style: 'font-size:.82rem;margin:.2rem 0 .5rem' },
-        'Из выбранного ад-сета берутся таргетинг, пиксель и атрибуция. Имена повторяются между кабинетами — в строке видны кабинет и последние цифры ID.'),
-      sourceSearch, sourceSelect, sourceNote),
+    sourceBlock,
     adSetExistingNote,
     adSetFieldsBlock,
 

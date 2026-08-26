@@ -215,6 +215,19 @@ func (f LaunchForm) Compose() (meta.HierarchySpec, error) {
 		if destination := strings.TrimSpace(f.AdSet.DestinationType); destination != "" {
 			adSet.DestinationType = meta.DestinationType(destination)
 		}
+		// A from-scratch ad set has no source to inherit optimization/billing
+		// from, and Meta rejects an ad set that carries neither. Default to a
+		// traffic setup that any account accepts; a conversion goal still needs
+		// its pixel, which the operator supplies above.
+		if adSet.OptimizationGoal == "" {
+			adSet.OptimizationGoal = meta.OptimizationGoalLinkClicks
+		}
+		if adSet.BillingEvent == "" {
+			adSet.BillingEvent = meta.BillingEventImpressions
+		}
+		if adSet.DestinationType == "" {
+			adSet.DestinationType = meta.DestinationWebsite
+		}
 		if pixel := strings.TrimSpace(f.AdSet.PixelID); pixel != "" {
 			adSet.PromotedObject = &meta.PromotedObject{
 				PixelID:         pixel,
