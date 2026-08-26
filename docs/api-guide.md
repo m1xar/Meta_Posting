@@ -398,6 +398,44 @@ Tracker metrics require the tracking link to carry
 `sub_id_3={{campaign.name}}` and `sub_id_7={{campaign.id}}`. See
 [guards.md](guards.md) for the full matching and evaluation semantics.
 
+## Launcher-oriented endpoints
+
+The browser launcher is built on these; they are equally usable from a script:
+
+```bash
+# Accounts with a readiness verdict, and existing ad sets scoped to the
+# accounts you will publish into:
+curl -H "Authorization: Bearer $API_KEY" "$BASE_URL/v1/launch/accounts"
+curl -H "Authorization: Bearer $API_KEY" \
+  "$BASE_URL/v1/launch/templates?ad_account_ids=UUID1,UUID2&search=DE"
+curl -H "Authorization: Bearer $API_KEY" "$BASE_URL/v1/launch/templates/TEMPLATE_UUID"
+
+# Pages an account may advertise (only these back a publishable existing post):
+curl -H "Authorization: Bearer $API_KEY" \
+  "$BASE_URL/v1/ad-accounts/AD_ACCOUNT_UUID/promotable-pages"
+
+# One-shot publish with an ad set (source or manual targeting), a creative
+# (fields or object_story_id) and a checkpoint ladder. Publishing is async;
+# poll the returned batch to a terminal state:
+curl -X POST "$BASE_URL/v1/launch" -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" -d @launch.json
+curl -H "Authorization: Bearer $API_KEY" "$BASE_URL/v1/batches/BATCH_UUID"
+```
+
+## Campaign operations
+
+```bash
+# Deep-copy a campaign in Meta (ad sets, ads, creatives), created paused:
+curl -X POST "$BASE_URL/v1/campaigns/CAMPAIGN_UUID/duplicate" -H "Authorization: Bearer $API_KEY"
+
+# Delete a campaign (Meta status DELETED + local cleanup):
+curl -X DELETE "$BASE_URL/v1/campaigns/CAMPAIGN_UUID" -H "Authorization: Bearer $API_KEY"
+
+# Queue an immediate tenant-wide re-sync, and check whether one is running:
+curl -X POST "$BASE_URL/v1/sync/refresh" -H "Authorization: Bearer $API_KEY"
+curl -H "Authorization: Bearer $API_KEY" "$BASE_URL/v1/sync/status"
+```
+
 ## 7. Query stored Insights
 
 ```bash

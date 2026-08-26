@@ -844,6 +844,85 @@ paths:
       responses:
         "200":
           description: Guard disabled.
+  /v1/launch:
+    post:
+      tags: [Batches]
+      summary: Publish a campaign hierarchy with checkpoint guards
+      description: Composes an ad set from a source ad set or manual targeting,
+        a creative from fields or an existing post (object_story_id), and
+        queues the batch across the selected accounts with an optional guard
+        ladder. Publishing runs asynchronously; poll the returned batch.
+      operationId: launch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "201": { description: Batch queued (with guard if checkpoints given). }
+        "202": { description: Batch queued; guard partially attached (warning). }
+  /v1/launch/accounts:
+    get:
+      tags: [Batches]
+      summary: Ad accounts with a launch-readiness verdict
+      operationId: listLaunchAccounts
+      responses:
+        "200": { description: Accounts and per-account blockers. }
+  /v1/launch/templates:
+    get:
+      tags: [Batches]
+      summary: Existing ad sets offered as launch sources (light list)
+      operationId: listLaunchTemplates
+      parameters:
+        - { name: search, in: query, schema: { type: string } }
+        - name: ad_account_ids
+          in: query
+          description: Restrict to these accounts (comma-separated UUIDs).
+          schema: { type: string }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200": { description: Light ad-set list. }
+  /v1/launch/templates/{id}:
+    get:
+      tags: [Batches]
+      summary: One ad set with full targeting and a representative creative
+      operationId: getLaunchTemplate
+      parameters: [ { $ref: "#/components/parameters/ID" } ]
+      responses:
+        "200": { description: Full ad-set detail. }
+  /v1/ad-accounts/{id}/promotable-pages:
+    get:
+      tags: [Batches]
+      summary: Pages this account may advertise (Meta /promote_pages)
+      description: Used by the launcher to offer only existing posts publishable
+        in the selected accounts.
+      operationId: promotablePages
+      parameters: [ { $ref: "#/components/parameters/ID" } ]
+      responses:
+        "200": { description: Promotable pages, matched to page assets. }
+  /v1/sync/refresh:
+    post:
+      tags: [Workspace]
+      summary: Queue an immediate re-sync for the tenant
+      operationId: syncRefresh
+      responses:
+        "202": { description: Sync jobs queued. }
+  /v1/sync/status:
+    get:
+      tags: [Workspace]
+      summary: In-flight sync job count for the tenant
+      operationId: syncStatus
+      responses:
+        "200":
+          description: Sync status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  syncing: { type: boolean }
+                  jobs: { type: integer }
   /v1/campaigns:
     get:
       tags: [Guards]
@@ -885,6 +964,14 @@ paths:
       responses:
         "200":
           description: Campaign activated.
+  /v1/campaigns/{id}:
+    delete:
+      tags: [Campaigns]
+      summary: Delete a campaign on Meta and locally
+      operationId: deleteCampaign
+      parameters: [ { $ref: "#/components/parameters/ID" } ]
+      responses:
+        "204": { description: Campaign deleted. }
   /v1/campaigns/{id}/duplicate:
     post:
       tags: [Guards]

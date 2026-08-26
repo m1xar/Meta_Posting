@@ -37,13 +37,42 @@ The service covers:
 - guard automation: a ladder of lifetime-spend checkpoints per batch or
   campaign - when spend crosses a rung, minimum clicks/impressions/tracker
   metrics are verified and the campaign is paused if they are not met.
-  Facebook's native automated rules are not used.
+  Facebook's native automated rules are not used;
+- campaign operations: pause, resume, deep-copy duplicate, and delete
+  (Meta status DELETED plus local cleanup).
 
 Instant Forms/lead retrieval, click-to-message destinations, and catalogs are
 intentionally out of scope for this version.
 
 There is no automatic Insights-retention cutoff in this release; records remain
 until an operator explicitly removes them.
+
+## Workspace
+
+Four pages under `/app`, session-authenticated:
+
+- **Dashboard** — aggregate spend/revenue/registrations/deposits, live
+  campaigns, connection health with a reconnect banner when a token expires,
+  a live sync indicator while a large discovery runs, and a "Sync now" button.
+- **Launcher** — publish one hierarchy to many accounts in one step:
+  - *Ad set*: **New** (manual targeting — countries, age, gender, placements,
+    pixel, destination — built from scratch) or **Existing** (copy a source ad
+    set as-is). Sources are filtered to the selected accounts.
+  - *Creative*: **New** (page, link, media, CTA) or **Existing post**
+    (`object_story_id`). Posts are offered only from pages every selected
+    account may advertise (Meta `/promote_pages`), so a post that would fail
+    at ad creation is never selectable.
+  - *Checkpoint ladder*: the spend-guard rungs, attached atomically with the
+    batch. Tracker-dependent rungs warn before launch that they only work when
+    the destination link routes through Keitaro.
+  - Launch waits for the real publish outcome (polling the batch) and reports
+    success, the concrete Meta error, or a still-publishing notice — it never
+    shows "queued" as success.
+- **Campaigns** — every campaign (launched here or discovered in the account),
+  paged by 50, with status badges (in review, rejected, with issues, needs
+  billing), metrics, checkpoint chips, and live controls: pause/resume, edit
+  the ladder, **Duplicate** (Meta deep copy), and **Delete**.
+- **Ad account** — one account's aggregate totals and its campaigns.
 
 ## Stack and layout
 
