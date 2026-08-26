@@ -49,6 +49,16 @@ type LaunchAdSetForm struct {
 	// Overrides for what would otherwise be inherited.
 	OptimizationGoal string `json:"optimization_goal,omitempty"`
 	BillingEvent     string `json:"billing_event,omitempty"`
+	// Manual targeting, used when no source ad set is copied. Any of these
+	// present builds the targeting spec from scratch instead of inheriting.
+	Countries       []string `json:"countries,omitempty"`
+	AgeMin          int      `json:"age_min,omitempty"`
+	AgeMax          int      `json:"age_max,omitempty"`
+	Gender          string   `json:"gender,omitempty"` // all | male | female
+	Platforms       []string `json:"platforms,omitempty"`
+	PixelID         string   `json:"pixel_id,omitempty"`
+	CustomEventType string   `json:"custom_event_type,omitempty"`
+	DestinationType string   `json:"destination_type,omitempty"`
 }
 
 type LaunchCreativeForm struct {
@@ -170,8 +180,8 @@ func (f LaunchForm) Compose() (meta.HierarchySpec, error) {
 	}
 
 	// Targeting, the promoted object and attribution come from the source ad
-	// set verbatim. They are the parts most likely to be wrong when retyped,
-	// and the parts a buyer has already proven.
+	// set verbatim when one is copied - the parts most likely to be wrong when
+	// retyped, and the parts a buyer has already proven.
 	inherited := meta.RawFields{}
 	for _, key := range []string{"targeting", "promoted_object", "attribution_spec", "destination_type"} {
 		if value, ok := source[key]; ok && value != nil {
@@ -180,6 +190,42 @@ func (f LaunchForm) Compose() (meta.HierarchySpec, error) {
 	}
 	if len(inherited) > 0 {
 		adSet.Raw = inherited
+	}
+	// Manual targeting, when supplied, is authoritative and replaces the
+	// inherited targeting/promoted-object/destination so a from-scratch ad set
+	// needs no source at all.
+	if len(f.AdSet.Countries) > 0 {
+		targeting := meta.Targeting{
+			GeoLocations:       map[string]any{"countries": f.AdSet.Countries},
+			PublisherPlatforms: f.AdSet.Platforms,
+		}
+		if f.AdSet.AgeMin > 0 {
+			targeting.AgeMin = f.AdSet.AgeMin
+		}
+		if f.AdSet.AgeMax > 0 {
+			targeting.AgeMax = f.AdSet.AgeMax
+		}
+		switch strings.ToLower(strings.TrimSpace(f.AdSet.Gender)) {
+		case "male":
+			targeting.Genders = []int{1}
+		case "female":
+			targeting.Genders = []int{2}
+		}
+		adSet.Targeting = targeting
+		if destination := strings.TrimSpace(f.AdSet.DestinationType); destination != "" {
+			adSet.DestinationType = meta.DestinationType(destination)
+		}
+		if pixel := strings.TrimSpace(f.AdSet.PixelID); pixel != "" {
+			adSet.PromotedObject = &meta.PromotedObject{
+				PixelID:         pixel,
+				CustomEventType: strings.TrimSpace(f.AdSet.CustomEventType),
+			}
+		}
+		// Manual targeting owns these keys; drop the inherited copies so the
+		// two do not both reach Meta.
+		delete(adSet.Raw, "targeting")
+		delete(adSet.Raw, "promoted_object")
+		delete(adSet.Raw, "destination_type")
 	}
 
 	creative, err := f.composeCreative()

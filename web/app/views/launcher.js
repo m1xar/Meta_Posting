@@ -177,6 +177,19 @@ export async function launcherView() {
   const adSetModeNew = el('input', { type: 'radio', name: 'adset-mode', value: 'new', checked: true, style: 'width:auto' });
   const adSetModeExisting = el('input', { type: 'radio', name: 'adset-mode', value: 'existing', style: 'width:auto' });
   const sourceLabel = el('span', {}, 'Source ad set (targeting)');
+  // Manual targeting for a from-scratch ad set.
+  const tgCountries = el('input', { type: 'text', placeholder: 'DE, AT, CH' });
+  const tgAgeMin = el('input', { type: 'number', min: '13', max: '65', value: '18' });
+  const tgAgeMax = el('input', { type: 'number', min: '13', max: '65', value: '65' });
+  const tgGender = el('select', {}, ...['all', 'male', 'female'].map((g) => el('option', { value: g }, g)));
+  const tgDestination = el('select', {}, ...['WEBSITE', 'APP'].map((d) => el('option', { value: d }, d)));
+  const tgPixel = el('input', { type: 'text', placeholder: 'pixel id (optional)' });
+  const tgEvent = el('select', {}, ...['', 'PURCHASE', 'LEAD', 'COMPLETE_REGISTRATION', 'ADD_TO_CART', 'INITIATE_CHECKOUT', 'VIEW_CONTENT'].map((e) => el('option', { value: e }, e || 'no pixel event')));
+  const platformNames = ['facebook', 'instagram', 'audience_network', 'messenger'];
+  const tgPlatforms = platformNames.map((name) => ({
+    name,
+    box: el('input', { type: 'checkbox', checked: name === 'facebook' || name === 'instagram', style: 'width:auto' }),
+  }));
   const postPageSelect = el('select', {});
   const postSelect = el('select', { style: 'width:100%' });
   const postNote = el('div', { class: 'muted', style: 'font-size:.8rem;margin-top:.4rem' });
@@ -290,17 +303,32 @@ export async function launcherView() {
   modePost.addEventListener('change', () => { state.creativeMode = 'post'; applyCreativeMode(); });
 
   // --- ad-set mode: new (edit fields) vs existing (copy source as-is) ------
+  const targetingBlock = el('div', {},
+    el('span', { class: 'label' }, 'Таргетинг (если не копируешь ад-сет)'),
+    el('p', { style: 'font-size:.8rem;margin:.2rem 0 .6rem' },
+      'Заполни, чтобы собрать ад-сет с нуля без источника. Если источник выбран выше — его таргетинг имеет приоритет только когда эти поля пустые.'),
+    el('div', { class: 'grid-2', style: 'margin:.4rem 0' },
+      field('Страны (ISO, через запятую)', tgCountries, 'напр. DE, AT, CH'),
+      field('Возраст от', tgAgeMin),
+      field('Возраст до', tgAgeMax),
+      field('Пол', tgGender),
+      field('Destination', tgDestination),
+      field('Pixel ID', tgPixel, 'для оптимизации по конверсиям'),
+      field('Событие пикселя', tgEvent),
+      field('Плейсменты', el('div', { style: 'display:flex;gap:.9rem;flex-wrap:wrap;padding-top:.3rem' },
+        ...tgPlatforms.map((pl) => el('label', { style: 'display:flex;gap:.35rem;align-items:center' },
+          pl.box, el('span', { style: 'text-transform:none;letter-spacing:0;font-size:.82rem' }, pl.name)))))));
+
   const adSetFieldsBlock = el('div', {},
-    el('p', { style: 'font-size:.82rem;margin:.4rem 0 0' },
-      'Таргетинг и пиксель берутся из выбранного выше ад-сета. Эти поля — то, что отличается.'),
-    el('div', { class: 'grid-2', style: 'margin:.6rem 0 1.2rem' },
+    el('div', { class: 'grid-2', style: 'margin:.6rem 0 1rem' },
       field('Ad set name', adSetName, 'Имя создаваемого ад-сета'),
       field('Daily budget', dailyBudget, 'Дневной или лайфтайм, не оба'),
       field('Lifetime budget', lifetimeBudget),
       field('Optimization goal', optimizationGoal),
       field('Billing event', billingEvent),
       field('Start', startTime),
-      field('End', endTime, 'Обязателен при lifetime-бюджете')));
+      field('End', endTime, 'Обязателен при lifetime-бюджете')),
+    targetingBlock);
 
   const adSetExistingNote = el('p', {
     class: 'muted', style: 'font-size:.84rem;margin:.4rem 0 1rem;display:none',
@@ -310,7 +338,7 @@ export async function launcherView() {
     const existing = state.adSetMode === 'existing';
     adSetFieldsBlock.style.display = existing ? 'none' : '';
     adSetExistingNote.style.display = existing ? '' : 'none';
-    sourceLabel.textContent = existing ? 'Существующий ад-сет' : 'Source ad set (targeting)';
+    sourceLabel.textContent = existing ? 'Существующий ад-сет (обязательно)' : 'Источник таргетинга (опционально — или заполни поля ниже)';
   };
   adSetModeNew.addEventListener('change', () => { state.adSetMode = 'new'; applyAdSetMode(); });
   adSetModeExisting.addEventListener('change', () => { state.adSetMode = 'existing'; applyAdSetMode(); });
@@ -475,6 +503,15 @@ export async function launcherView() {
           end_time: localTime(endTime.value),
           optimization_goal: optimizationGoal.value || undefined,
           billing_event: billingEvent.value || undefined,
+          // Manual targeting (used when no source ad set is copied).
+          countries: tgCountries.value.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean),
+          age_min: Number(tgAgeMin.value) || 0,
+          age_max: Number(tgAgeMax.value) || 0,
+          gender: tgGender.value,
+          platforms: tgPlatforms.filter((pl) => pl.box.checked).map((pl) => pl.name),
+          pixel_id: tgPixel.value.trim(),
+          custom_event_type: tgEvent.value || undefined,
+          destination_type: tgDestination.value || undefined,
         },
         creative: {
           object_story_id: state.creativeMode === 'post' ? (state.objectStoryId || '') : '',
@@ -524,13 +561,17 @@ export async function launcherView() {
         el('span', {}, 'Выбери страницу и пост, либо переключись на «Новый креатив».')));
       return false;
     }
-    if (!state.source) {
-      // Without a source the ad set carries no targeting and no pixel. Meta
-      // accepts that and then delivers to nobody, which looks like a broken
-      // launch rather than a missing choice.
+    const hasManualGeo = tgCountries.value.split(',').map((x) => x.trim()).filter(Boolean).length > 0;
+    if (state.adSetMode === 'existing' && !state.source) {
       status.replaceChildren(el('div', { class: 'error' },
-        el('strong', {}, 'No source ad set chosen'),
-        el('span', {}, 'Targeting and the pixel are copied from an existing ad set. Pick one in step 2.')));
+        el('strong', {}, 'Исходный ад-сет не выбран'),
+        el('span', {}, 'В режиме «Существующий ад-сет» выбери ад-сет для копирования, либо переключись на «Новый ад-сет».')));
+      return false;
+    }
+    if (state.adSetMode === 'new' && !state.source && !hasManualGeo) {
+      status.replaceChildren(el('div', { class: 'error' },
+        el('strong', {}, 'Нет таргетинга'),
+        el('span', {}, 'Для нового ад-сета укажи страны в блоке «Таргетинг», либо выбери исходный ад-сет для копирования настроек.')));
       return false;
     }
     return true;
