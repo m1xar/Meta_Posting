@@ -7,7 +7,8 @@ info:
   description: |
     API-only internal service for official Meta OAuth, advertising inventory
     discovery, asynchronous multi-account publishing, persisted Insights, and
-    pause-only automation rules.
+    spend-checkpoint guards fed by Facebook Insights and Keitaro tracker
+    statistics (registrations, deposits, revenue).
 
     Except for health/readiness, the served OpenAPI document, and the Meta OAuth
     callback, callers authenticate with the administrator bearer token. Meta
@@ -37,11 +38,11 @@ tags:
   - name: Media
     description: Persistent local image and video uploads.
   - name: Capabilities
-    description: Typed campaign and rule vocabulary.
+    description: Typed campaign vocabulary and guard metric names.
   - name: Batches
     description: Asynchronous multi-account hierarchy publishing.
-  - name: Rules
-    description: Pause-only automation configuration and evaluation history.
+  - name: Guards
+    description: Spend-checkpoint guards, campaign views with tracker metrics, and pause/resume controls.
   - name: Insights
     description: Persisted Meta Insights snapshots.
   - name: Jobs
@@ -762,192 +763,153 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-  /v1/rules:
-    post:
-      tags: [Rules]
-      operationId: createRule
-      summary: Create a pause automation rule
-      description: |
-        Creates a stored rule. Only the `pause` action is accepted. Use
-        `disabled` while validating a new configuration.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateRuleRequest"
-      responses:
-        "201":
-          description: Rule created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
+  /v1/guards:
     get:
-      tags: [Rules]
-      operationId: listRules
-      summary: List automation rules
+      tags: [Guards]
+      summary: List checkpoint guards in the caller's tenant
+      operationId: listGuards
       parameters:
         - $ref: "#/components/parameters/Limit"
         - $ref: "#/components/parameters/Offset"
-        - name: connection_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: ad_account_id
-          in: query
-          schema:
-            type: string
-            format: uuid
         - name: batch_id
           in: query
-          schema:
-            type: string
-            format: uuid
-        - name: statuses
-          in: query
-          description: Comma-separated rule statuses.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              $ref: "#/components/schemas/RuleStatus"
+          schema: { type: string, format: uuid }
       responses:
         "200":
-          description: Paginated rules.
+          description: Guard page.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutomationRulePage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/rules/{id}:
-    parameters:
-      - $ref: "#/components/parameters/ID"
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/CampaignGuard" }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+  /v1/guards/{id}:
     get:
-      tags: [Rules]
-      operationId: getRule
-      summary: Get one automation rule
+      tags: [Guards]
+      summary: One guard with every recorded checkpoint outcome
+      operationId: getGuard
+      parameters:
+        - $ref: "#/components/parameters/ID"
       responses:
         "200":
-          description: Rule.
+          description: Guard and checks.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
+                type: object
+                properties:
+                  guard: { $ref: "#/components/schemas/CampaignGuard" }
+                  checks:
+                    type: array
+                    items: { $ref: "#/components/schemas/GuardCheck" }
     patch:
-      tags: [Rules]
-      operationId: updateRule
-      summary: Update rule configuration
-      description: Scheduling/history timestamps maintained by the worker are read-only.
+      tags: [Guards]
+      summary: Edit a live guard's ladder, name, status or interval
+      operationId: updateGuard
+      parameters:
+        - $ref: "#/components/parameters/ID"
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateRuleRequest"
+            schema: { $ref: "#/components/schemas/GuardUpdate" }
       responses:
         "200":
-          description: Updated rule.
+          description: Updated guard.
           content:
             application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /v1/rules/{id}/enable:
-    parameters:
-      - $ref: "#/components/parameters/ID"
+              schema: { $ref: "#/components/schemas/CampaignGuard" }
+  /v1/guards/{id}/enable:
     post:
-      tags: [Rules]
-      operationId: enableRule
-      summary: Enable scheduled evaluation
-      responses:
-        "200":
-          description: Enabled rule.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /v1/rules/{id}/disable:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    post:
-      tags: [Rules]
-      operationId: disableRule
-      summary: Disable scheduled evaluation
-      responses:
-        "200":
-          description: Disabled rule.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /v1/rules/{id}/evaluations:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    get:
-      tags: [Rules]
-      operationId: listRuleEvaluations
-      summary: List a rule's evaluation audit records
+      tags: [Guards]
+      summary: Re-activate a guard
+      operationId: enableGuard
       parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: published_object_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: statuses
-          in: query
-          description: Comma-separated evaluation statuses.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              $ref: "#/components/schemas/RuleEvaluationStatus"
+        - $ref: "#/components/parameters/ID"
       responses:
         "200":
-          description: Paginated evaluation records.
+          description: Guard re-activated.
+  /v1/guards/{id}/disable:
+    post:
+      tags: [Guards]
+      summary: Disable a guard without deleting its history
+      operationId: disableGuard
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Guard disabled.
+  /v1/campaigns:
+    get:
+      tags: [Guards]
+      summary: Campaign views joined with insights, tracker stats and checks
+      operationId: listCampaignViews
+      parameters:
+        - name: ad_account_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Campaign views and aggregate totals.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/RuleEvaluationPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
+                type: object
+                properties:
+                  campaigns:
+                    type: array
+                    items: { $ref: "#/components/schemas/CampaignView" }
+                  totals: { $ref: "#/components/schemas/CampaignTotals" }
+  /v1/campaigns/{id}/pause:
+    post:
+      tags: [Guards]
+      summary: Pause one published campaign on Meta
+      operationId: pauseCampaign
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Campaign paused.
+  /v1/campaigns/{id}/resume:
+    post:
+      tags: [Guards]
+      summary: Resume one campaign; failed checks become overridden
+      operationId: resumeCampaign
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Campaign activated.
+  /v1/campaigns/{id}/guard:
+    post:
+      tags: [Guards]
+      summary: Create a campaign-scoped guard overriding the batch guard
+      operationId: createCampaignGuard
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GuardUpdate" }
+      responses:
+        "201":
+          description: Guard created for this campaign only.
+  /v1/ad-accounts/{id}/stats:
+    get:
+      tags: [Guards]
+      summary: One ad account with its campaigns and aggregate totals
+      operationId: accountStats
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Account, campaign views and totals.
   /v1/insights:
     get:
       tags: [Insights]
@@ -1660,10 +1622,8 @@ components:
         - billing_events
         - optimization_goals
         - bid_strategies
-        - rule_operators
-        - rule_actions
-        - rule_target_levels
-        - common_rule_metrics
+        - guard_metrics
+        - guard_metrics
         - raw_fields_supported
         - excluded_capabilities
       properties:
@@ -1698,24 +1658,12 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BidStrategy"
-        rule_actions:
+        guard_metrics:
           type: array
           items:
             type: string
-            enum: [pause]
-        rule_operators:
-          type: array
-          items:
-            $ref: "#/components/schemas/RuleOperator"
-        rule_target_levels:
-          type: array
-          items:
-            type: string
-            enum: [campaign, adset, ad]
-        common_rule_metrics:
-          type: array
-          items:
-            type: string
+          examples:
+            - [spend, clicks, tracker_leads, tracker_sales]
         raw_fields_supported:
           type: boolean
         excluded_capabilities:
@@ -2701,381 +2649,98 @@ components:
     InsightLevel:
       type: string
       enum: [account, campaign, adset, ad]
-    RuleStatus:
-      type: string
-      enum: [active, disabled, archived]
-    RuleAction:
-      type: string
-      enum: [pause]
-    RuleOperator:
-      type: string
-      enum: [gt, gte, lt, lte, eq, neq]
-    RuleLogic:
-      type: string
-      enum: [all, any]
-    SampleGuard:
+    GuardCheckpoint:
       type: object
       additionalProperties: false
-      required: [metric, minimum]
+      required: [spend]
+      description: One rung of the spend ladder. When lifetime spend reaches
+        `spend`, every non-zero minimum must already be met or the campaign is
+        paused. Tracker leads are Keitaro registrations; tracker sales are
+        deposits.
       properties:
-        metric:
-          $ref: "#/components/schemas/MetricName"
-        minimum:
-          type: number
-          minimum: 0
-        missing_as_zero:
-          type: boolean
-          default: false
-    RuleCondition:
+        spend: { type: number, exclusiveMinimum: 0 }
+        min_clicks: { type: integer, minimum: 0 }
+        min_impressions: { type: integer, minimum: 0 }
+        min_tracker_clicks: { type: integer, minimum: 0 }
+        min_tracker_leads: { type: number, minimum: 0 }
+        min_tracker_sales: { type: number, minimum: 0 }
+        min_tracker_revenue: { type: number, minimum: 0 }
+    CampaignGuard:
       type: object
-      additionalProperties: false
-      required: [metric, operator, threshold]
       properties:
-        metric:
-          $ref: "#/components/schemas/MetricName"
-        operator:
-          $ref: "#/components/schemas/RuleOperator"
-        threshold:
-          type: number
-        missing_as_zero:
-          type: boolean
-          default: false
-          description: Use only when an absent metric semantically means zero.
-        minimum_samples:
+        id: { type: string, format: uuid }
+        connection_id: { type: string, format: uuid }
+        batch_id: { type: string, format: uuid }
+        published_object_id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [active, disabled] }
+        checkpoints:
           type: array
-          items:
-            $ref: "#/components/schemas/SampleGuard"
-    RuleGroup:
+          items: { $ref: "#/components/schemas/GuardCheckpoint" }
+        evaluation_interval_seconds: { type: integer }
+        next_evaluation_at: { type: string, format: date-time }
+        last_evaluated_at: { type: string, format: date-time }
+    GuardUpdate:
       type: object
       additionalProperties: false
-      required: [logic]
       properties:
-        logic:
-          $ref: "#/components/schemas/RuleLogic"
-        conditions:
+        name: { type: string }
+        status: { type: string, enum: [active, disabled] }
+        checkpoints:
           type: array
-          items:
-            $ref: "#/components/schemas/RuleCondition"
-        groups:
+          items: { $ref: "#/components/schemas/GuardCheckpoint" }
+        evaluation_interval_seconds: { type: integer, minimum: 60 }
+    GuardCheck:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        guard_id: { type: string, format: uuid }
+        published_object_id: { type: string, format: uuid }
+        meta_object_id: { type: string }
+        checkpoint_index: { type: integer }
+        checkpoint_spend: { type: number }
+        status: { type: string, enum: [passed, failed, overridden] }
+        observed: { type: object }
+        thresholds: { $ref: "#/components/schemas/GuardCheckpoint" }
+        paused: { type: boolean }
+        error: { type: string }
+        evaluated_at: { type: string, format: date-time }
+    TrackerStat:
+      type: object
+      description: Latest Keitaro all-time roll-up for one campaign, matched
+        by sub_id_7 (campaign id) with a sub_id_3 (campaign name) fallback.
+      properties:
+        meta_campaign_id: { type: string }
+        campaign_name: { type: string }
+        clicks: { type: integer }
+        unique_clicks: { type: integer }
+        leads: { type: number }
+        sales: { type: number }
+        revenue: { type: number }
+        last_synced_at: { type: string, format: date-time }
+    CampaignView:
+      type: object
+      properties:
+        campaign: { $ref: "#/components/schemas/PublishedObject" }
+        insights: { $ref: "#/components/schemas/InsightSnapshot" }
+        tracker: { $ref: "#/components/schemas/TrackerStat" }
+        guard: { $ref: "#/components/schemas/CampaignGuard" }
+        checks:
           type: array
-          items:
-            $ref: "#/components/schemas/RuleGroup"
-        minimum_samples:
-          type: array
-          items:
-            $ref: "#/components/schemas/SampleGuard"
-      description: Must contain at least one condition or child group.
-    MetricName:
-      type: string
-      pattern: "^[A-Za-z0-9][A-Za-z0-9_-]*(\\.[A-Za-z0-9][A-Za-z0-9_-]*)*$"
-      examples:
-        - spend
-        - ctr
-        - actions.complete_registration
-        - cost_per_action_type.purchase
-    RuleConfiguration:
+          items: { $ref: "#/components/schemas/GuardCheck" }
+    CampaignTotals:
       type: object
-      required:
-        - connection_id
-        - name
-        - scope_level
-        - conditions
-        - lookback_seconds
       properties:
-        connection_id:
-          type: string
-          format: uuid
-        ad_account_id:
-          type: [string, "null"]
-          format: uuid
-          description: Optional account scope.
-        batch_id:
-          type: [string, "null"]
-          format: uuid
-          description: Optional scope limited to objects published by one batch.
-        name:
-          type: string
-          minLength: 1
-        scope_level:
-          type: string
-          enum: [campaign, adset, ad]
-        action:
-          allOf:
-            - $ref: "#/components/schemas/RuleAction"
-          default: pause
-        conditions:
-          $ref: "#/components/schemas/RuleGroup"
-        lookback_seconds:
-          type: integer
-          format: int64
-          minimum: 1
-          description: Rolling evaluation window in seconds.
-        evaluation_interval_seconds:
-          type: integer
-          format: int64
-          minimum: 60
-          default: 900
-        grace_period_seconds:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 0
-          description: Delay measured from the local published object's `created_at`.
-        cooldown_seconds:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 0
-        minimum_spend:
-          type: number
-          minimum: 0
-          default: 0
-          description: Account-currency units, not minor-unit integer.
-        minimum_impressions:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 0
-        timezone:
-          type: string
-          examples: [Asia/Dubai]
-        metadata:
-          type: object
-          additionalProperties: true
-    CreateRuleRequest:
-      allOf:
-        - $ref: "#/components/schemas/RuleConfiguration"
-        - type: object
-          properties:
-            status:
-              type: string
-              enum: [active, disabled]
-              default: active
-      unevaluatedProperties: false
-      description: New rules may be created disabled and enabled after review.
-    UpdateRuleRequest:
-      type: object
-      additionalProperties: false
-      minProperties: 1
-      properties:
-        ad_account_id:
-          type: [string, "null"]
-          format: uuid
-        batch_id:
-          type: [string, "null"]
-          format: uuid
-        name:
-          type: string
-          minLength: 1
-        status:
-          type: string
-          enum: [active, disabled]
-        scope_level:
-          type: string
-          enum: [campaign, adset, ad]
-        action:
-          $ref: "#/components/schemas/RuleAction"
-        conditions:
-          $ref: "#/components/schemas/RuleGroup"
-        lookback_seconds:
-          type: integer
-          format: int64
-          minimum: 1
-        evaluation_interval_seconds:
-          type: integer
-          format: int64
-          minimum: 60
-        grace_period_seconds:
-          type: integer
-          format: int64
-          minimum: 0
-        cooldown_seconds:
-          type: integer
-          format: int64
-          minimum: 0
-        minimum_spend:
-          type: number
-          minimum: 0
-        minimum_impressions:
-          type: integer
-          format: int64
-          minimum: 0
-        timezone:
-          type: string
-          minLength: 1
-        metadata:
-          type: object
-          additionalProperties: true
-    AutomationRule:
-      allOf:
-        - $ref: "#/components/schemas/RuleConfiguration"
-        - type: object
-          required:
-            - id
-            - status
-            - next_evaluation_at
-            - created_at
-            - updated_at
-          properties:
-            id:
-              type: string
-              format: uuid
-            status:
-              $ref: "#/components/schemas/RuleStatus"
-            next_evaluation_at:
-              type: string
-              format: date-time
-            last_evaluated_at:
-              type: [string, "null"]
-              format: date-time
-            last_triggered_at:
-              type: [string, "null"]
-              format: date-time
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-      unevaluatedProperties: false
-    AutomationRulePage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/AutomationRule"
-    RuleEvaluationStatus:
-      type: string
-      enum:
-        - no_match
-        - matched
-        - action_succeeded
-        - action_failed
-        - skipped
-        - error
-    RuleEvaluation:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - rule_id
-        - meta_object_id
-        - status
-        - window_start
-        - window_end
-        - observed_metrics
-        - condition_results
-        - action_attempted
-        - action_response
-        - evaluated_at
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        rule_id:
-          type: string
-          format: uuid
-        published_object_id:
-          type: [string, "null"]
-          format: uuid
-        meta_object_id:
-          type: string
-        status:
-          $ref: "#/components/schemas/RuleEvaluationStatus"
-        window_start:
-          type: string
-          format: date-time
-        window_end:
-          type: string
-          format: date-time
-        observed_metrics:
-          type: object
-          additionalProperties:
-            type: number
-        condition_results:
-          $ref: "#/components/schemas/RuleEvaluationResult"
-        action_attempted:
-          type: boolean
-        action_response:
-          type: object
-          additionalProperties: true
-        error:
-          type: string
-        evaluated_at:
-          type: string
-          format: date-time
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    RuleEvaluationResult:
-      type: object
-      additionalProperties: false
-      required: [matched, reasons]
-      properties:
-        matched:
-          type: boolean
-        reasons:
-          type: array
-          items:
-            type: string
-        observations:
-          type: array
-          items:
-            $ref: "#/components/schemas/RuleObservation"
-    RuleObservation:
-      type: object
-      additionalProperties: false
-      required:
-        - path
-        - kind
-        - metric
-        - value
-        - found
-        - operator
-        - threshold
-        - matched
-        - explanation
-      properties:
-        path:
-          type: string
-        kind:
-          type: string
-          enum: [condition, minimum_sample]
-        metric:
-          $ref: "#/components/schemas/MetricName"
-        value:
-          type: number
-        found:
-          type: boolean
-        defaulted:
-          type: boolean
-        operator:
-          $ref: "#/components/schemas/RuleOperator"
-        threshold:
-          type: number
-        matched:
-          type: boolean
-        explanation:
-          type: string
-    RuleEvaluationPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/RuleEvaluation"
+        campaigns: { type: integer }
+        live: { type: integer }
+        paused: { type: integer }
+        spend: { type: number }
+        clicks: { type: integer }
+        impressions: { type: integer }
+        tracker_clicks: { type: integer }
+        tracker_leads: { type: number }
+        tracker_sales: { type: number }
+        tracker_revenue: { type: number }
     InsightSnapshot:
       type: object
       additionalProperties: false

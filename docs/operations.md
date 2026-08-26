@@ -6,7 +6,7 @@ Raze Posting runs as three long-lived Docker Compose services plus one
 one-shot initializer:
 
 - `api`: internal bearer-authenticated HTTP API plus the public OAuth callback;
-- `worker`: claims asynchronous jobs and evaluates scheduled rules;
+- `worker`: claims asynchronous jobs, evaluates campaign guards, and syncs Keitaro tracker statistics;
 - `postgres`: PostgreSQL 18;
 - `uploads-init`: prepares bind-mount ownership, then exits successfully.
 
@@ -50,6 +50,8 @@ values:
 | `META_OAUTH_REDIRECT_URI` | exact callback registered in Meta |
 | `META_LOGIN_CONFIG_ID` | Facebook Login for Business configuration |
 | `WORKER_CONCURRENCY` | maximum number of jobs processed concurrently |
+| `KEITARO_BASE_URL` | Keitaro tracker origin (empty disables tracker sync) |
+| `KEITARO_API_KEY` | Keitaro Admin API key |
 
 Default requested permissions are:
 
@@ -151,14 +153,16 @@ traffic readiness. Operational monitoring should additionally watch:
 - connection `last_error`, token expiry, and last sync age;
 - batches in `running` for unexpectedly long periods;
 - Meta throttling and permission errors;
-- scheduled-rule evaluation lag.
+- guard evaluation lag and campaigns paused by guards;
+- Keitaro tracker sync failures (job type `sync_tracker`).
 
 The normal worker execution settings are controlled by:
 
 - `WORKER_CONCURRENCY`;
 - `WORKER_POLL_INTERVAL`;
 - `INSIGHTS_POLL_INTERVAL`;
-- `RULE_EVALUATION_INTERVAL`;
+- `GUARD_EVALUATION_INTERVAL`;
+- `KEITARO_POLL_INTERVAL`;
 - `JOB_LEASE_DURATION`;
 - `JOB_MAX_ATTEMPTS`.
 
@@ -229,7 +233,9 @@ For a failed batch, inspect in this order:
 4. account status, currency, capabilities, and selected assets;
 5. Meta error code/subcode and request ID.
 
-For a rule that paused unexpectedly, disable the rule first, then inspect its
-evaluation record, time window, attribution setting, sample gates, missing
-metric handling, and the target object's effective status. This version does
-not automatically resume paused objects.
+For a campaign a guard paused unexpectedly, open its checks on the campaigns
+page (or `GET /v1/campaigns`): each check stores the observed metrics and the
+thresholds it was judged against. Resuming the campaign overrides the failed
+check; later rungs still apply. If tracker metrics look empty, verify the
+Keitaro sync job runs and the tracking links carry
+`sub_id_7={{campaign.id}}` / `sub_id_3={{campaign.name}}`.

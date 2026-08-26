@@ -2,8 +2,9 @@
 
 Multi-tenant service for connecting Meta users, discovering their
 advertising inventory, publishing the same campaign hierarchy to many ad
-accounts, collecting Insights, and pausing underperforming objects with
-automation rules.
+accounts, collecting Insights, merging per-campaign registration/deposit
+statistics from a Keitaro tracker, and pausing underperforming campaigns
+with spend-checkpoint guards.
 
 Operators create an account with a login and password and use the browser
 workspace at `/app`. Every Meta connection and all resources below it are
@@ -29,7 +30,14 @@ The service covers:
 - per-account overrides, account-currency budgets, partial batch success, and
   idempotent batch submission;
 - `ONLINE_GAMBLING_AND_GAMING` special-ad-category payloads;
-- indefinitely stored Insights and pause-only automation rules.
+- indefinitely stored Insights and account-wide daily metrics;
+- Keitaro tracker integration: per-campaign clicks, registrations (leads),
+  deposits (sales) and revenue, matched by `sub_id_7` (campaign id) with a
+  `sub_id_3` (campaign name) fallback;
+- guard automation: a ladder of lifetime-spend checkpoints per batch or
+  campaign - when spend crosses a rung, minimum clicks/impressions/tracker
+  metrics are verified and the campaign is paused if they are not met.
+  Facebook's native automated rules are not used.
 
 Instant Forms/lead retrieval, click-to-message destinations, and catalogs are
 intentionally out of scope for this version.
@@ -58,7 +66,8 @@ Important paths:
 | `migrations` | PostgreSQL migrations |
 | `openapi/openapi.yaml` | OpenAPI 3.1 contract |
 | `docs/api-guide.md` | end-to-end API examples |
-| `docs/rule-dsl.md` | rule DSL and metric names |
+| `docs/guards.md` | checkpoint-guard behavior and tracker matching |
+| `internal/keitaro` | Keitaro Admin API report client |
 | `docs/operations.md` | configuration and deployment notes |
 
 ## Local start
@@ -137,5 +146,5 @@ when a caller explicitly wants a non-spending launch.
 
 Start with [docs/api-guide.md](docs/api-guide.md). The machine-readable contract
 is [openapi/openapi.yaml](openapi/openapi.yaml), and rule behavior is described
-in [docs/rule-dsl.md](docs/rule-dsl.md). A running API also serves interactive
+in [docs/guards.md](docs/guards.md). A running API also serves interactive
 Swagger UI at `GET /docs` (with `GET /swagger` as an alias).

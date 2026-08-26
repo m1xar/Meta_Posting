@@ -346,63 +346,57 @@ requires real dependency IDs to Graph-validate the latter two; the service does
 not create temporary billable hierarchy objects during a dry run. The result
 stages explicitly distinguish `validated` from `locally_validated`.
 
-## 6. Create a pause rule
+## 6. Guard a launch with a checkpoint ladder
 
-This rule pauses a campaign when spend is at least 100 account-currency units
-and registrations remain below one in a rolling 24-hour window, after a
-one-hour grace period:
+Guards replace both the old rule DSL and Facebook's own automated rules. A
+guard is a ladder of lifetime-spend checkpoints: when a campaign's spend
+crosses a rung, every non-zero minimum on that rung must already be met or
+the campaign is paused. Attach the ladder in the same call that launches
+(`POST /v1/launch` with `checkpoints`), or manage it afterwards:
 
 ```bash
+# Give one live campaign its own rules (overrides its batch guard):
 curl --fail-with-body \
-  -X POST "$BASE_URL/v1/rules" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -X POST "$BASE_URL/v1/campaigns/CAMPAIGN_UUID/guard" \
+  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "connection_id": "CONNECTION_UUID",
-    "batch_id": "BATCH_UUID",
-    "name": "Stop no registrations after spend",
-    "status": "disabled",
-    "scope_level": "campaign",
-    "action": "pause",
-    "lookback_seconds": 86400,
-    "evaluation_interval_seconds": 900,
-    "grace_period_seconds": 3600,
-    "minimum_spend": 100,
-    "minimum_impressions": 1000,
-    "timezone": "Asia/Dubai",
-    "conditions": {
-      "logic": "all",
-      "conditions": [
-        {"metric": "spend", "operator": "gte", "threshold": 100},
-        {
-          "metric": "actions.complete_registration",
-          "operator": "lt",
-          "threshold": 1,
-          "missing_as_zero": true
-        }
-      ]
-    }
+    "checkpoints": [
+      {"spend": 5,  "min_tracker_clicks": 20},
+      {"spend": 15, "min_tracker_leads": 1},
+      {"spend": 40, "min_tracker_sales": 1}
+    ]
   }'
+
+# Edit a live guard in place:
+curl --fail-with-body \
+  -X PATCH "$BASE_URL/v1/guards/GUARD_UUID" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"checkpoints": [{"spend": 20, "min_tracker_sales": 1}]}'
+
+# Pause or resume one campaign; resuming overrides its failed checks so the
+# guard does not immediately pause it again:
+curl -X POST "$BASE_URL/v1/campaigns/CAMPAIGN_UUID/pause"  -H "Authorization: Bearer $API_KEY"
+curl -X POST "$BASE_URL/v1/campaigns/CAMPAIGN_UUID/resume" -H "Authorization: Bearer $API_KEY"
 ```
 
-See [rule-dsl.md](rule-dsl.md) before using action or conversion metrics.
-
-Review the configuration, then enable its scheduled evaluation:
+Campaign rows joined with Facebook lifetime insights, Keitaro tracker
+roll-ups (registrations, deposits, revenue) and every checkpoint outcome:
 
 ```bash
 curl --fail-with-body \
-  -X POST "$BASE_URL/v1/rules/RULE_UUID/enable" \
-  -H "Authorization: Bearer $ADMIN_TOKEN"
-```
+  -H "Authorization: Bearer $API_KEY" \
+  "$BASE_URL/v1/campaigns"
 
-Scheduled active rules execute their configured action when all eligibility
-checks and conditions pass. Inspect the audit records:
-
-```bash
 curl --fail-with-body \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$BASE_URL/v1/rules/RULE_UUID/evaluations?limit=100"
+  -H "Authorization: Bearer $API_KEY" \
+  "$BASE_URL/v1/ad-accounts/AD_ACCOUNT_UUID/stats"
 ```
+
+Tracker metrics require the tracking link to carry
+`sub_id_3={{campaign.name}}` and `sub_id_7={{campaign.id}}`. See
+[guards.md](guards.md) for the full matching and evaluation semantics.
 
 ## 7. Query stored Insights
 
