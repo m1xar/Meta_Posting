@@ -280,6 +280,9 @@ func (s *Scheduler) runInitialPass(ctx context.Context) {
 		s.options.Logger.Error("initial rule scheduling", "error", err)
 	}
 	s.runInitialAccountPass(ctx, now)
+	if err := s.ScheduleTrackerSync(ctx, now); err != nil && ctx.Err() == nil {
+		s.options.Logger.Error("initial tracker scheduling", "error", err)
+	}
 }
 
 // runInitialAccountPass schedules the per-account work once at startup
