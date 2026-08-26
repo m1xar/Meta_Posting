@@ -173,6 +173,9 @@ export async function launcherView() {
   state.objectStoryId = '';
   const modeNew = el('input', { type: 'radio', name: 'creative-mode', value: 'new', checked: true, style: 'width:auto' });
   const modePost = el('input', { type: 'radio', name: 'creative-mode', value: 'post', style: 'width:auto' });
+  state.adSetMode = 'new';
+  const adSetModeNew = el('input', { type: 'radio', name: 'adset-mode', value: 'new', checked: true, style: 'width:auto' });
+  const adSetModeExisting = el('input', { type: 'radio', name: 'adset-mode', value: 'existing', style: 'width:auto' });
   const postPageSelect = el('select', {});
   const postSelect = el('select', { style: 'width:100%' });
   const postNote = el('div', { class: 'muted', style: 'font-size:.8rem;margin-top:.4rem' });
@@ -285,6 +288,31 @@ export async function launcherView() {
   modeNew.addEventListener('change', () => { state.creativeMode = 'new'; applyCreativeMode(); });
   modePost.addEventListener('change', () => { state.creativeMode = 'post'; applyCreativeMode(); });
 
+  // --- ad-set mode: new (edit fields) vs existing (copy source as-is) ------
+  const adSetFieldsBlock = el('div', {},
+    el('p', { style: 'font-size:.82rem;margin:.4rem 0 0' },
+      'Таргетинг и пиксель берутся из выбранного выше ад-сета. Эти поля — то, что отличается.'),
+    el('div', { class: 'grid-2', style: 'margin:.6rem 0 1.2rem' },
+      field('Ad set name', adSetName, 'Имя создаваемого ад-сета'),
+      field('Daily budget', dailyBudget, 'Дневной или лайфтайм, не оба'),
+      field('Lifetime budget', lifetimeBudget),
+      field('Optimization goal', optimizationGoal),
+      field('Billing event', billingEvent),
+      field('Start', startTime),
+      field('End', endTime, 'Обязателен при lifetime-бюджете')));
+
+  const adSetExistingNote = el('p', {
+    class: 'muted', style: 'font-size:.84rem;margin:.4rem 0 1rem;display:none',
+  }, 'Все настройки (бюджет, оптимизация, биллинг, таргетинг, расписание) берутся из выбранного ад-сета как есть. Выбери исходный ад-сет в блоке «Copy settings from an existing ad set» выше.');
+
+  const applyAdSetMode = () => {
+    const existing = state.adSetMode === 'existing';
+    adSetFieldsBlock.style.display = existing ? 'none' : '';
+    adSetExistingNote.style.display = existing ? '' : 'none';
+  };
+  adSetModeNew.addEventListener('change', () => { state.adSetMode = 'new'; applyAdSetMode(); });
+  adSetModeExisting.addEventListener('change', () => { state.adSetMode = 'existing'; applyAdSetMode(); });
+
 
   sourceSelect.addEventListener('change', async () => {
     const picked = (templates.items || []).find((t) => t.id === sourceSelect.value);
@@ -386,18 +414,12 @@ export async function launcherView() {
       field('Campaign spend cap', spendCap, 'Hard ceiling enforced by Meta itself'),
     ),
 
-    el('span', { class: 'label' }, 'New ad set'),
-    el('p', { style: 'font-size:.82rem;margin:.4rem 0 0' },
-      'Targeting and the pixel come from the ad set chosen above. These fields cover what differs.'),
-    el('div', { class: 'grid-2', style: 'margin:.6rem 0 1.2rem' },
-      field('Ad set name', adSetName, 'The name of the ad set being created'),
-      field('Daily budget', dailyBudget, 'Set either daily or lifetime, not both'),
-      field('Lifetime budget', lifetimeBudget),
-      field('Optimization goal', optimizationGoal),
-      field('Billing event', billingEvent),
-      field('Start', startTime),
-      field('End', endTime, 'Required with a lifetime budget'),
-    ),
+    el('span', { class: 'label' }, 'Ad set'),
+    el('div', { class: 'mode-toggle' },
+      el('label', { class: 'mode-option' }, adSetModeNew, el('span', {}, 'Новый ад-сет')),
+      el('label', { class: 'mode-option' }, adSetModeExisting, el('span', {}, 'Существующий ад-сет'))),
+    adSetExistingNote,
+    adSetFieldsBlock,
 
     el('span', { class: 'label' }, 'Creative'),
     el('div', { class: 'mode-toggle' },
