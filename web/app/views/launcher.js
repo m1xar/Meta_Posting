@@ -699,9 +699,8 @@ export async function launcherView() {
           const rungs = ladder.read().length;
           if (!window.confirm(`Publish into ${state.selected.size} ad account(s) with ${rungs} checkpoint(s)?`)) return;
           const button = event.currentTarget;
-          const label = button.textContent;
           button.disabled = true;
-          button.textContent = 'Публикуем…';
+          button.classList.add('loading');
           status.replaceChildren(el('div', { class: 'card panel', style: 'display:flex;gap:.6rem;align-items:center' },
             el('span', { class: 'spinner' }), el('span', {}, 'Отправляем в Meta и ждём ответ…')));
           try {
@@ -721,7 +720,7 @@ export async function launcherView() {
             }
           } catch (error) {
             showError(error);
-          } finally { button.disabled = false; button.textContent = label; }
+          } finally { button.disabled = false; button.classList.remove('loading'); }
         },
       }, 'Launch'),
     ),

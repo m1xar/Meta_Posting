@@ -22,7 +22,7 @@ export class ApiError extends Error {
   get isForbidden() { return this.status === 403; }
 }
 
-async function request(method, path, body) {
+async function request(method, path, body, options = {}) {
   const headers = {};
   const init = { method, headers, credentials: 'same-origin' };
 
@@ -34,7 +34,23 @@ async function request(method, path, body) {
   // Bearer callers do not need it and the server does not ask them for one.
   if (method !== 'GET') headers['X-CSRF-Token'] = csrfToken();
 
-  const response = await fetch(path, init);
+  // Never let a request hang forever: an unanswered fetch would freeze the UI
+  // with no success and no error. Abort after a bound and surface it.
+  const controller = new AbortController();
+  init.signal = controller.signal;
+  const timeoutMs = options.timeoutMs || 45000;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(path, init);
+  } catch (err) {
+    clearTimeout(timer);
+    if (err.name === 'AbortError') {
+      throw new ApiError(0, 'timeout', `Запрос не ответил за ${Math.round(timeoutMs / 1000)}с — попробуй ещё раз`);
+    }
+    throw new ApiError(0, 'network', 'Сеть недоступна или сервер не отвечает');
+  }
+  clearTimeout(timer);
   if (response.status === 204) return null;
 
   const text = await response.text();
@@ -87,7 +103,7 @@ export const api = {
   syncRefresh: () => request('POST', '/v1/sync/refresh', {}),
   syncStatus: () => request('GET', '/v1/sync/status'),
   launchPreview: (payload) => request('POST', '/v1/launch/preview', payload),
-  launch: (payload) => request('POST', '/v1/launch', payload),
+  launch: (payload) => request('POST', '/v1/launch', payload, { timeoutMs: 90000 }),
 
   // posting
   batches: (params) => request('GET', `/v1/batches${query(params)}`),

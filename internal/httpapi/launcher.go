@@ -199,7 +199,17 @@ func (s *Server) launch(c fiber.Ctx) error {
 			return err
 		}
 	}
+	s.logger.Info("launch requested",
+		"request_id", getRequestID(c),
+		"user_id", principal.UserID,
+		"connection_id", request.ConnectionID,
+		"ad_accounts", len(request.AdAccountIDs),
+		"checkpoints", len(request.Checkpoints),
+	)
 	result, err := s.service.Launch(c.Context(), request)
+	if err != nil {
+		s.logger.Warn("launch failed", "request_id", getRequestID(c), "error", err)
+	}
 	if err != nil {
 		// A partially guarded batch still reports what was created, so the
 		// caller can act rather than guess.

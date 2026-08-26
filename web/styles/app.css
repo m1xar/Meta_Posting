@@ -249,3 +249,12 @@ code { font-family: var(--mono); font-size: .82em; }
   animation: spin 0.7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Button with an inline spinner while an action is in flight. */
+.button.loading { position: relative; color: transparent !important; pointer-events: none; }
+.button.loading::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  width: .9rem; height: .9rem; margin: -.45rem 0 0 -.45rem;
+  border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
+  border-radius: 50%; animation: spin .6s linear infinite;
+}
