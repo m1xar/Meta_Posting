@@ -126,8 +126,8 @@ func (s *Service) SyncConnection(ctx context.Context, connectionID uuid.UUID) (s
 	}
 
 	for _, source := range result.Pages {
-		// Page access tokens are intentionally never persisted; the encrypted
-		// user token remains the single credential source.
+		// Page access tokens are short-lived derivatives of the encrypted user
+		// grant and are intentionally never persisted.
 		source.AccessToken = ""
 		if err := s.upsertAsset(ctx, domain.Asset{
 			ConnectionID: connectionID,
@@ -274,7 +274,6 @@ func databaseInventoryReconciliation(
 		input.SeenPageMetaIDs = uniqueStrings(input.SeenPageMetaIDs)
 		input.SeenPageInstagramIDs = uniqueStrings(input.SeenPageInstagramIDs)
 	}
-
 	for accountKey, assets := range result.Assets {
 		localAccountID := localAdAccountID(adAccountIDs, accountKey)
 		if localAccountID == uuid.Nil {

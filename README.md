@@ -1,14 +1,16 @@
 # Raze Posting
 
-Internal, API-only service for connecting multiple Meta users, discovering their
+Multi-tenant service for connecting Meta users, discovering their
 advertising inventory, publishing the same campaign hierarchy to many ad
 accounts, collecting Insights, and pausing underperforming objects with
 automation rules.
 
-There is no browser UI. Internal callers authenticate with one administrator
-bearer token. Meta users are connected through official Facebook Login for
-Business; Meta access tokens are never returned by this API and are encrypted
-at rest.
+Operators create an account with a login and password and use the browser
+workspace at `/app`. Every Meta connection and all resources below it are
+isolated by the owning user. The administrator bearer API remains available
+for operations and compatibility. Meta users are connected through official
+Facebook Login for Business; Meta access tokens are never returned by this API
+and are encrypted at rest.
 
 ## Scope
 
@@ -88,13 +90,18 @@ go vet ./...
 
 ## Authentication
 
+The browser workspace uses a server-side, HttpOnly session cookie and a
+per-session CSRF token. Registration is available at `GET /register`, sign-in
+at `GET /login`, and the authenticated workspace at `GET /app`.
+
 Every `/v1` endpoint requires:
 
 ```http
 Authorization: Bearer <INTERNAL_API_TOKEN>
 ```
 
-`GET /healthz`, `GET /readyz`, `GET /openapi.yaml`, and
+`GET /healthz`, `GET /readyz`, `GET /docs`, `GET /swagger`,
+`GET /openapi.yaml`, and
 `GET /oauth/facebook/callback` are public. The callback is public because Meta
 redirects the user's browser to it, but it is protected by the short-lived,
 one-time OAuth `state` created by `POST /v1/oauth/sessions`.
@@ -130,4 +137,5 @@ when a caller explicitly wants a non-spending launch.
 
 Start with [docs/api-guide.md](docs/api-guide.md). The machine-readable contract
 is [openapi/openapi.yaml](openapi/openapi.yaml), and rule behavior is described
-in [docs/rule-dsl.md](docs/rule-dsl.md).
+in [docs/rule-dsl.md](docs/rule-dsl.md). A running API also serves interactive
+Swagger UI at `GET /docs` (with `GET /swagger` as an alias).

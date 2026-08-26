@@ -180,6 +180,39 @@ func TestOpenAPIDocumentIsPublic(t *testing.T) {
 	require.Equal(t, "application/yaml; charset=utf-8", response.Header.Get("Content-Type"))
 }
 
+func TestLegalPagesArePublic(t *testing.T) {
+	server := newTestServer(t)
+	for _, path := range []string{"/privacy", "/terms", "/data-deletion"} {
+		response, err := server.App.Test(httptest.NewRequest(http.MethodGet, path, nil))
+		require.NoError(t, err)
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		require.NoError(t, readErr)
+		require.Equal(t, http.StatusOK, response.StatusCode, path)
+		require.Contains(t, response.Header.Get("Content-Type"), "text/html", path)
+		require.Contains(t, string(body), "Raze Posting", path)
+	}
+}
+
+func TestSwaggerUIIsPublic(t *testing.T) {
+	server := newTestServer(t)
+	for _, path := range []string{"/docs", "/docs/", "/swagger", "/swagger/"} {
+		t.Run(path, func(t *testing.T) {
+			response, err := server.App.Test(httptest.NewRequest(http.MethodGet, path, nil))
+			require.NoError(t, err)
+			defer response.Body.Close()
+			require.Equal(t, http.StatusOK, response.StatusCode)
+			require.Equal(t, "text/html; charset=utf-8", response.Header.Get("Content-Type"))
+			require.Equal(t, "DENY", response.Header.Get("X-Frame-Options"))
+
+			body, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			require.Contains(t, string(body), `url: "/openapi.yaml"`)
+			require.Contains(t, string(body), "swagger-ui-dist@5.32.11")
+		})
+	}
+}
+
 func listenForTest(t *testing.T, app *fiber.App) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

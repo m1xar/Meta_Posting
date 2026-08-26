@@ -7,11 +7,36 @@ import (
 	"gorm.io/gorm"
 )
 
+var LegacyUserID = uuid.MustParse("00000000-0000-0000-0000-000000000001")
+
 type Model struct {
 	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	CreatedAt time.Time `gorm:"not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"not null" json:"updated_at"`
 }
+
+// User is the tenant boundary for every operator-visible resource. A Meta
+// identity may be connected by more than one User without sharing inventory,
+// batches, media, insights, or rules between them.
+type User struct {
+	Model
+	Login        string     `gorm:"not null" json:"login"`
+	PasswordHash string     `gorm:"not null" json:"-"`
+	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+}
+
+func (User) TableName() string { return "users" }
+
+type UserSession struct {
+	Model
+	UserID     uuid.UUID `gorm:"type:uuid;not null" json:"user_id"`
+	TokenHash  []byte    `gorm:"not null" json:"-"`
+	CSRFHash   []byte    `gorm:"not null" json:"-"`
+	ExpiresAt  time.Time `gorm:"not null" json:"expires_at"`
+	LastSeenAt time.Time `gorm:"not null" json:"last_seen_at"`
+}
+
+func (UserSession) TableName() string { return "user_sessions" }
 
 func (m *Model) BeforeCreate(_ *gorm.DB) error {
 	if m.ID == uuid.Nil {
@@ -22,6 +47,7 @@ func (m *Model) BeforeCreate(_ *gorm.DB) error {
 
 type MetaConnection struct {
 	Model
+	UserID                uuid.UUID            `gorm:"type:uuid;not null" json:"user_id"`
 	MetaUserID            string               `gorm:"not null" json:"meta_user_id"`
 	DisplayName           string               `gorm:"not null;default:''" json:"display_name"`
 	Email                 string               `gorm:"not null;default:''" json:"email"`
@@ -41,8 +67,19 @@ type MetaConnection struct {
 
 func (MetaConnection) TableName() string { return "meta_connections" }
 
+func (m *MetaConnection) BeforeCreate(tx *gorm.DB) error {
+	if err := m.Model.BeforeCreate(tx); err != nil {
+		return err
+	}
+	if m.UserID == uuid.Nil {
+		m.UserID = LegacyUserID
+	}
+	return nil
+}
+
 type OAuthSession struct {
 	Model
+	UserID                uuid.UUID          `gorm:"type:uuid;not null" json:"user_id"`
 	StateHash             []byte             `gorm:"not null" json:"-"`
 	RedirectURI           string             `gorm:"not null" json:"redirect_uri"`
 	RequestedScopes       JSON               `gorm:"type:jsonb;not null;default:'[]'" json:"requested_scopes"`
@@ -56,6 +93,16 @@ type OAuthSession struct {
 }
 
 func (OAuthSession) TableName() string { return "oauth_sessions" }
+
+func (m *OAuthSession) BeforeCreate(tx *gorm.DB) error {
+	if err := m.Model.BeforeCreate(tx); err != nil {
+		return err
+	}
+	if m.UserID == uuid.Nil {
+		m.UserID = LegacyUserID
+	}
+	return nil
+}
 
 type Business struct {
 	Model

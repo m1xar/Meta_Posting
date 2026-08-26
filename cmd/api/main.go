@@ -88,6 +88,7 @@ func run(logger *slog.Logger) error {
 	}
 	server, err := httpapi.New(service, httpapi.Config{
 		InternalToken: []byte(cfg.InternalAPIToken),
+		Environment:   cfg.Environment,
 		OpenAPI:       openAPI,
 		Logger:        logger,
 		BodyLimit:     int(maxUploadBytes + (8 << 20)),

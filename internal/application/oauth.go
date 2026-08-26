@@ -11,6 +11,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-posting/internal/domain"
 	"github.com/watchers-factory/raze-posting/internal/meta"
 )
@@ -18,6 +19,13 @@ import (
 const oauthSessionLifetime = 30 * time.Minute
 
 func (s *Service) StartOAuth(ctx context.Context) (OAuthStart, error) {
+	return s.StartOAuthForUser(ctx, domain.LegacyUserID)
+}
+
+func (s *Service) StartOAuthForUser(ctx context.Context, userID uuid.UUID) (OAuthStart, error) {
+	if userID == uuid.Nil {
+		return OAuthStart{}, invalid("user_id", "is required")
+	}
 	stateBytes := make([]byte, 32)
 	random := s.Random
 	if random == nil {
@@ -31,6 +39,7 @@ func (s *Service) StartOAuth(ctx context.Context) (OAuthStart, error) {
 	now := s.Now()
 	expiresAt := now.Add(oauthSessionLifetime)
 	session := &domain.OAuthSession{
+		UserID:          userID,
 		StateHash:       stateHash[:],
 		RedirectURI:     s.Config.Meta.RedirectURI,
 		RequestedScopes: domain.MustJSON(s.Config.Meta.Scopes),
@@ -117,6 +126,7 @@ func (s *Service) CompleteOAuth(ctx context.Context, state, code string) (OAuthC
 	dataAccessExpiresAt := pointerIfNonZero(debug.DataAccessExpirationTime())
 	missingScopes := missingStrings(s.Config.Meta.Scopes, debug.Scopes)
 	connection := &domain.MetaConnection{
+		UserID:                session.UserID,
 		MetaUserID:            debug.UserID,
 		DisplayName:           user.Name,
 		Status:                domain.MetaConnectionActive,
@@ -138,7 +148,7 @@ func (s *Service) CompleteOAuth(ctx context.Context, state, code string) (OAuthC
 	if err := s.Repos.MetaConnections.Upsert(ctx, connection); err != nil {
 		return failSession(fmt.Errorf("save Meta connection: %w", err))
 	}
-	connection, err = s.Repos.MetaConnections.FindByMetaUserID(ctx, debug.UserID)
+	connection, err = s.Repos.MetaConnections.FindByUserAndMetaUserID(ctx, session.UserID, debug.UserID)
 	if err != nil {
 		return failSession(fmt.Errorf("reload Meta connection: %w", err))
 	}
@@ -168,6 +178,32 @@ func (s *Service) CompleteOAuth(ctx context.Context, state, code string) (OAuthC
 		DisplayName:  connection.DisplayName,
 		SyncJobID:    job.ID,
 	}, nil
+}
+
+// RevokeConnection invalidates Meta's grant before locally marking the
+// connection revoked. A future OAuth flow can then establish a new, narrower
+// consent grant without retaining superseded permissions.
+func (s *Service) RevokeConnection(ctx context.Context, connectionID uuid.UUID) error {
+	connection, token, err := s.accessToken(ctx, connectionID)
+	if err != nil {
+		return err
+	}
+	var result map[string]any
+	if err := s.Meta.Delete(ctx, "/me/permissions", token, nil, &result); err != nil {
+		return err
+	}
+	if err := s.Repos.MetaConnections.SetStatus(ctx, connectionID, domain.MetaConnectionRevoked, "revoked by operator"); err != nil {
+		return err
+	}
+	s.audit(ctx, domain.AuditEvent{
+		ConnectionID: &connection.ID,
+		ActorType:    "operator",
+		Action:       "meta.connection.revoked",
+		EntityType:   "meta_connection",
+		EntityID:     connection.ID.String(),
+		Severity:     domain.AuditInfo,
+	})
+	return nil
 }
 
 func pointerIfNonZero(value time.Time) *time.Time {

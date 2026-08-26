@@ -58,10 +58,25 @@ func (s *Server) oauthCallback(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	if strings.Contains(c.Get("Accept"), "text/html") {
+		return c.Redirect().To("/app?meta=connected")
+	}
 	return jsonOK(c, http.StatusOK, fiber.Map{
 		"status":     "connected",
 		"connection": completion,
 	})
+}
+
+// startOAuthRedirect starts the browser-facing Meta connection flow.
+// The API endpoint remains available for programmatic clients; this route is
+// intended for an operator who opens the product in a normal browser.
+func (s *Server) startOAuthRedirect(c fiber.Ctx) error {
+	result, err := s.service.StartOAuth(c.Context())
+	if err != nil {
+		return err
+	}
+	c.Set("Cache-Control", "no-store")
+	return c.Redirect().To(result.AuthorizationURL)
 }
 
 func (s *Server) startOAuth(c fiber.Ctx) error {
@@ -112,6 +127,17 @@ func (s *Server) getConnection(c fiber.Ctx) error {
 		return err
 	}
 	return jsonOK(c, http.StatusOK, item)
+}
+
+func (s *Server) revokeConnection(c fiber.Ctx) error {
+	id, err := parseID(c.Params("id"), "id")
+	if err != nil {
+		return err
+	}
+	if err := s.service.RevokeConnection(c.Context(), id); err != nil {
+		return err
+	}
+	return c.SendStatus(http.StatusNoContent)
 }
 
 func (s *Server) syncConnection(c fiber.Ctx) error {
@@ -225,6 +251,13 @@ func (s *Server) listAssets(c fiber.Ctx) error {
 			return invalidField("types", "contains an unsupported asset type")
 		}
 	}
+	if len(types) == 0 {
+		types = []domain.AssetType{
+			domain.AssetPage, domain.AssetInstagramAccount, domain.AssetPixel, domain.AssetDataset,
+			domain.AssetCustomConversion, domain.AssetCustomAudience, domain.AssetLookalikeAudience,
+			domain.AssetMetaApp, domain.AssetPost,
+		}
+	}
 	activeOnly := true
 	if raw := strings.TrimSpace(c.Query("active_only")); raw != "" {
 		switch raw {
@@ -264,10 +297,7 @@ func (s *Server) auditPagePosts(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return jsonOK(c, http.StatusOK, fiber.Map{
-		"items": posts,
-		"total": len(posts),
-	})
+	return jsonOK(c, http.StatusOK, fiber.Map{"items": posts, "total": len(posts)})
 }
 
 func (s *Server) createMedia(c fiber.Ctx) error {
@@ -294,6 +324,9 @@ func (s *Server) createMedia(c fiber.Ctx) error {
 	}
 	adAccountID, err := optionalMultipartID(form, "ad_account_id")
 	if err != nil {
+		return err
+	}
+	if err := userOwnsMediaContext(c, connectionID, adAccountID, s.service); err != nil {
 		return err
 	}
 	kind := domain.MediaKind(strings.TrimSpace(firstMultipartValue(form, "kind")))

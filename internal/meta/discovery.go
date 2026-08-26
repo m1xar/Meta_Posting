@@ -332,7 +332,6 @@ func (c *Client) Discover(ctx context.Context, accessToken string, maxConcurrenc
 	if result.Pages, err = c.ListPages(ctx, accessToken); err != nil {
 		result.Failures = append(result.Failures, discoveryFailure("pages", "", "", err))
 	}
-
 	for _, business := range result.Businesses {
 		datasets, datasetErr := c.ListBusinessDatasets(ctx, accessToken, business.ID)
 		if datasetErr != nil {

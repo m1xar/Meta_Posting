@@ -16,12 +16,7 @@ type AdAccountCampaignAudit struct {
 	Ads       []map[string]any `json:"ads"`
 }
 
-func (c *Client) AuditPagePosts(
-	ctx context.Context,
-	userAccessToken string,
-	pageID string,
-	limit int,
-) ([]map[string]any, error) {
+func (c *Client) AuditPagePosts(ctx context.Context, userAccessToken, pageID string, limit int) ([]map[string]any, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -29,16 +24,9 @@ func (c *Client) AuditPagePosts(
 	pageAccounts, err := CollectPages[struct {
 		ID          string `json:"id"`
 		AccessToken string `json:"access_token"`
-	}](
-		ctx,
-		c,
-		"me/accounts",
-		userAccessToken,
-		url.Values{
-			"limit":  {"100"},
-			"fields": {"id,access_token"},
-		},
-	)
+	}](ctx, c, "me/accounts", userAccessToken, url.Values{
+		"limit": {"100"}, "fields": {"id,access_token"},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -52,22 +40,15 @@ func (c *Client) AuditPagePosts(
 	if pageAccessToken == "" {
 		return nil, fmt.Errorf("meta: no page access token available for page %s", pageID)
 	}
-
 	query := url.Values{
 		"limit": {strconv.Itoa(limit)},
 		"fields": {strings.Join([]string{
-			"id", "message", "story", "created_time", "updated_time",
-			"permalink_url", "is_published", "is_hidden", "status_type",
+			"id", "message", "story", "created_time", "updated_time", "permalink_url",
+			"is_published", "is_hidden", "status_type",
 			"attachments{media_type,type,url,target,media,subattachments}",
 		}, ",")},
 	}
-	return CollectPages[map[string]any](
-		ctx,
-		c,
-		pageID+"/posts",
-		pageAccessToken,
-		query,
-	)
+	return CollectPages[map[string]any](ctx, c, pageID+"/posts", pageAccessToken, query)
 }
 
 func (c *Client) AuditAdAccount(

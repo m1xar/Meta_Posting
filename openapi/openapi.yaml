@@ -1,5 +1,5 @@
 openapi: 3.1.0
-jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+jsonSchemaDialect: https://spec.openapis.org/oas/3.1/dialect/base
 info:
   title: Raze Posting API
   version: 0.1.0
@@ -98,6 +98,20 @@ paths:
                 type: string
         "404":
           $ref: "#/components/responses/NotFound"
+  /docs:
+    get:
+      tags: [System]
+      operationId: getSwaggerUI
+      summary: Interactive Swagger UI
+      description: Browser UI backed by the current `/openapi.yaml` contract.
+      security: []
+      responses:
+        "200":
+          description: Swagger UI HTML page.
+          content:
+            text/html:
+              schema:
+                type: string
   /oauth/facebook/callback:
     get:
       tags: [OAuth]
@@ -223,6 +237,25 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Connections]
+      operationId: revokeConnection
+      summary: Revoke a Meta connection and its consent grant
+      description: |
+        Revokes the current person's Meta grant before marking the local
+        connection revoked. Reconnect through OAuth to establish a fresh
+        consent grant with the currently configured permissions.
+      responses:
+        "204":
+          description: Connection grant revoked.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
   /v1/connections/{id}/sync:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -298,6 +331,46 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+  /v1/ad-accounts/{id}/campaign-audit:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      tags: [Inventory]
+      operationId: auditAdAccountCampaigns
+      summary: Read live campaign structures from Meta
+      description: |
+        Fetches campaigns, ad sets, ads, and creative details directly from
+        Meta for buyer-side inspection. Defaults to objects with effective
+        status `ACTIVE`.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - name: effective_status
+          in: query
+          description: Comma-separated Meta effective statuses. Defaults to `ACTIVE`.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+              examples: [ACTIVE, PAUSED]
+      responses:
+        "200":
+          description: Live Meta campaign structures for the selected ad account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdAccountCampaignAudit"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "504":
+          $ref: "#/components/responses/GatewayTimeout"
   /v1/assets:
     get:
       tags: [Inventory]
@@ -1329,6 +1402,28 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/AdAccount"
+    AdAccountCampaignAudit:
+      type: object
+      additionalProperties: false
+      required: [account_id, campaigns, ad_sets, ads]
+      properties:
+        account_id:
+          type: string
+        campaigns:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        ad_sets:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        ads:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
     AssetType:
       type: string
       enum:

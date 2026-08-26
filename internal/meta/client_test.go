@@ -415,7 +415,7 @@ func TestAuthorizationURLAndTokenExchange(t *testing.T) {
 	}
 	parsed, _ := url.Parse(authURL)
 	if parsed.Path != "/v25.0/dialog/oauth" || parsed.Query().Get("config_id") != "config" ||
-		parsed.Query().Get("scope") != "ads_read,ads_management" ||
+		parsed.Query().Get("scope") != "" ||
 		parsed.Query().Get("response_type") != "code" ||
 		parsed.Query().Get("override_default_response_type") != "true" {
 		t.Errorf("authorization URL = %s", authURL)

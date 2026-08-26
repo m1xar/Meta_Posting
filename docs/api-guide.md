@@ -97,6 +97,27 @@ The `id` fields are local UUIDs. Fields named `meta_*_id` are Meta identifiers.
 Batch account selection uses local ad-account UUIDs; creative and promoted
 object payloads use the relevant Meta identifiers.
 
+For buyer-side inspection, read live campaign structures from Meta for one
+local ad-account UUID:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$BASE_URL/v1/ad-accounts/AD_ACCOUNT_UUID/campaign-audit?effective_status=ACTIVE&limit=100"
+```
+
+To inspect usable existing posts, call the Page asset endpoint with its local
+asset UUID:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$BASE_URL/v1/assets/PAGE_ASSET_UUID/posts?limit=100"
+```
+
+Both audit endpoints read live Meta data. They do not create or update ads,
+campaigns, posts, or local inventory.
+
 ## 3. Upload media
 
 Upload one image or video to the persistent local upload directory:

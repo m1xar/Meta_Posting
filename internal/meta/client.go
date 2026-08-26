@@ -214,6 +214,19 @@ func (c *Client) GetWithMeta(ctx context.Context, graphPath, accessToken string,
 	}, out)
 }
 
+// Delete revokes or removes a Graph object. It is used for account-level
+// disconnects, which are idempotent from the user's perspective.
+func (c *Client) Delete(ctx context.Context, graphPath, accessToken string, query url.Values, out any) error {
+	_, err := c.do(ctx, func(ctx context.Context) (*http.Request, error) {
+		target, err := c.graphURL(graphPath, accessToken, query)
+		if err != nil {
+			return nil, err
+		}
+		return http.NewRequestWithContext(ctx, http.MethodDelete, target, nil)
+	}, out)
+	return err
+}
+
 func (c *Client) PostJSON(ctx context.Context, graphPath, accessToken string, query url.Values, payload any, out any) error {
 	_, err := c.PostJSONWithMeta(ctx, graphPath, accessToken, query, payload, out)
 	return err

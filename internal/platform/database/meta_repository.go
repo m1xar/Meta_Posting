@@ -14,6 +14,7 @@ import (
 var ErrOAuthSessionUnavailable = errors.New("OAuth session is missing, expired, or already consumed")
 
 type MetaConnectionFilter struct {
+	UserID *uuid.UUID
 	Status *domain.MetaConnectionStatus
 	Search string
 	Page   domain.PageRequest
@@ -42,7 +43,7 @@ func (r *MetaConnectionRepository) Create(ctx context.Context, connection *domai
 // method; the stable unique key keeps AAD valid across reconnects.
 func (r *MetaConnectionRepository) Upsert(ctx context.Context, connection *domain.MetaConnection) error {
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "meta_user_id"}},
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "meta_user_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"display_name", "email", "status", "access_token_ciphertext",
 			"access_token_nonce", "token_key_version", "token_expires_at",
@@ -60,6 +61,14 @@ func (r *MetaConnectionRepository) Get(ctx context.Context, id uuid.UUID) (*doma
 	return &connection, nil
 }
 
+func (r *MetaConnectionRepository) GetForUser(ctx context.Context, userID, id uuid.UUID) (*domain.MetaConnection, error) {
+	var connection domain.MetaConnection
+	if err := r.db.WithContext(ctx).First(&connection, "id = ? AND user_id = ?", id, userID).Error; err != nil {
+		return nil, err
+	}
+	return &connection, nil
+}
+
 func (r *MetaConnectionRepository) FindByMetaUserID(ctx context.Context, metaUserID string) (*domain.MetaConnection, error) {
 	var connection domain.MetaConnection
 	if err := r.db.WithContext(ctx).First(&connection, "meta_user_id = ?", metaUserID).Error; err != nil {
@@ -68,9 +77,20 @@ func (r *MetaConnectionRepository) FindByMetaUserID(ctx context.Context, metaUse
 	return &connection, nil
 }
 
+func (r *MetaConnectionRepository) FindByUserAndMetaUserID(ctx context.Context, userID uuid.UUID, metaUserID string) (*domain.MetaConnection, error) {
+	var connection domain.MetaConnection
+	if err := r.db.WithContext(ctx).First(&connection, "user_id = ? AND meta_user_id = ?", userID, metaUserID).Error; err != nil {
+		return nil, err
+	}
+	return &connection, nil
+}
+
 func (r *MetaConnectionRepository) List(ctx context.Context, filter MetaConnectionFilter) (domain.Page[domain.MetaConnection], error) {
 	page := filter.Page.Normalized()
 	query := r.db.WithContext(ctx).Model(&domain.MetaConnection{})
+	if filter.UserID != nil {
+		query = query.Where("user_id = ?", *filter.UserID)
+	}
 	if filter.Status != nil {
 		query = query.Where("status = ?", *filter.Status)
 	}

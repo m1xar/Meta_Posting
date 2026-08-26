@@ -18,10 +18,8 @@ func TestDatabaseInventoryReconciliationIncludesOnlyCompleteScopes(t *testing.T)
 	now := time.Now().UTC()
 	result := meta.DiscoveryResult{
 		Pages: []meta.Page{{
-			ID: "page-current",
-			InstagramBusinessAccount: &meta.InstagramAccount{
-				ID: "ig-page-current",
-			},
+			ID:                       "page-current",
+			InstagramBusinessAccount: &meta.InstagramAccount{ID: "ig-page-current"},
 		}},
 		Assets: map[string]meta.AccountAssets{
 			"1": {

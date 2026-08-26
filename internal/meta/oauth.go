@@ -19,9 +19,9 @@ type OAuthOptions struct {
 	Display     string
 }
 
-// AuthorizationURL creates a Facebook Login for Business-compatible OAuth
-// URL. ConfigID may be used with the configuration created in Meta's app
-// dashboard; explicit Scopes are also supported for development-mode login.
+// AuthorizationURL creates an OAuth URL. Facebook Login for Business uses a
+// saved configuration as the source of truth for permissions, whereas classic
+// Facebook Login uses the explicit scope parameter.
 func (c *Client) AuthorizationURL(options OAuthOptions) (string, error) {
 	if strings.TrimSpace(options.RedirectURI) == "" {
 		return "", errors.New("meta: OAuth redirect URI is required")
@@ -36,15 +36,15 @@ func (c *Client) AuthorizationURL(options OAuthOptions) (string, error) {
 	query.Set("redirect_uri", options.RedirectURI)
 	query.Set("state", options.State)
 	query.Set("response_type", "code")
-	if len(options.Scopes) > 0 {
-		query.Set("scope", strings.Join(options.Scopes, ","))
-	}
-	if options.ConfigID != "" {
-		query.Set("config_id", options.ConfigID)
+	if configID := strings.TrimSpace(options.ConfigID); configID != "" {
+		query.Set("config_id", configID)
 		// Facebook Login for Business configurations can define their own
-		// default response type. The backend consumes an authorization code, so
-		// explicitly make response_type=code take precedence.
+		// permissions and default response type. The backend consumes an
+		// authorization code, so explicitly make response_type=code take
+		// precedence. Do not send scope with config_id: Meta rejects it.
 		query.Set("override_default_response_type", "true")
+	} else if len(options.Scopes) > 0 {
+		query.Set("scope", strings.Join(options.Scopes, ","))
 	}
 	if options.AuthType != "" {
 		query.Set("auth_type", options.AuthType)

@@ -10,11 +10,7 @@ import (
 	"github.com/watchers-factory/raze-posting/internal/meta"
 )
 
-func (s *Service) AuditPagePosts(
-	ctx context.Context,
-	assetID uuid.UUID,
-	limit int,
-) ([]map[string]any, error) {
+func (s *Service) AuditPagePosts(ctx context.Context, assetID uuid.UUID, limit int) ([]map[string]any, error) {
 	asset, err := s.Repos.Inventory.GetAsset(ctx, assetID)
 	if err != nil {
 		return nil, err

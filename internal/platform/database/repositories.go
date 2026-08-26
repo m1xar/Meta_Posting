@@ -13,6 +13,7 @@ var ErrLeaseLost = errors.New("job lease is no longer owned by this worker")
 type Repositories struct {
 	db *gorm.DB
 
+	Users           *UserRepository
 	MetaConnections *MetaConnectionRepository
 	OAuthSessions   *OAuthSessionRepository
 	Inventory       *InventoryRepository
@@ -31,6 +32,7 @@ func NewRepositories(db *gorm.DB) *Repositories {
 }
 
 func (r *Repositories) bind() {
+	r.Users = &UserRepository{db: r.db}
 	r.MetaConnections = &MetaConnectionRepository{db: r.db}
 	r.OAuthSessions = &OAuthSessionRepository{db: r.db}
 	r.Inventory = &InventoryRepository{db: r.db}

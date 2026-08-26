@@ -32,10 +32,14 @@ const (
 	maxJSONBodyBytes         = 16 << 20
 	preAuthBodyPrefetchBytes = 1
 	requestIDLocal           = "request_id"
+	userSessionLocal         = "user_session"
+	userSessionCookie        = "raze_session"
+	userCSRFCookie           = "raze_csrf"
 )
 
 type Config struct {
 	InternalToken []byte
+	Environment   string
 	OpenAPI       []byte
 	Ready         func(context.Context) error
 	Logger        *slog.Logger
@@ -43,13 +47,14 @@ type Config struct {
 }
 
 type Server struct {
-	App       *fiber.App
-	service   *application.Service
-	token     [sha256.Size]byte
-	openAPI   []byte
-	ready     func(context.Context) error
-	logger    *slog.Logger
-	bodyLimit int
+	App           *fiber.App
+	service       *application.Service
+	token         [sha256.Size]byte
+	openAPI       []byte
+	ready         func(context.Context) error
+	logger        *slog.Logger
+	bodyLimit     int
+	secureCookies bool
 }
 
 type errorEnvelope struct {
@@ -78,12 +83,13 @@ func New(service *application.Service, cfg Config) (*Server, error) {
 	}
 
 	server := &Server{
-		service:   service,
-		token:     sha256.Sum256(cfg.InternalToken),
-		openAPI:   append([]byte(nil), cfg.OpenAPI...),
-		ready:     cfg.Ready,
-		logger:    cfg.Logger,
-		bodyLimit: cfg.BodyLimit,
+		service:       service,
+		token:         sha256.Sum256(cfg.InternalToken),
+		openAPI:       append([]byte(nil), cfg.OpenAPI...),
+		ready:         cfg.Ready,
+		logger:        cfg.Logger,
+		bodyLimit:     cfg.BodyLimit,
+		secureCookies: !strings.EqualFold(cfg.Environment, "development"),
 	}
 	server.App = fiber.New(fiber.Config{
 		AppName:                      "Raze Posting API",
@@ -110,13 +116,36 @@ func New(service *application.Service, cfg Config) (*Server, error) {
 func (s *Server) routes() {
 	s.App.Get("/healthz", s.health)
 	s.App.Get("/readyz", s.readiness)
+	s.App.Get("/docs", s.swaggerUI)
+	s.App.Get("/docs/", s.swaggerUI)
+	s.App.Get("/swagger", s.swaggerUI)
+	s.App.Get("/swagger/", s.swaggerUI)
 	s.App.Get("/openapi.yaml", s.openAPIDocument)
+	s.App.Get("/", s.landingPage)
+	s.App.Get("/privacy", s.privacyPolicy)
+	s.App.Get("/terms", s.termsOfService)
+	s.App.Get("/data-deletion", s.dataDeletion)
 	s.App.Get("/oauth/facebook/callback", s.oauthCallback)
+	s.App.Get("/login", s.loginPage)
+	s.App.Get("/register", s.registerPage)
+	s.App.Post("/auth/login", s.loginUser)
+	s.App.Post("/auth/register", s.registerUser)
+	s.App.Post("/auth/logout", s.requireUser, s.requireCSRF, s.logoutUser)
+	s.App.Get("/app", s.requireUser, s.appPage)
+	s.App.Get("/app/api/overview", s.requireUser, s.appOverview)
+	s.App.Get("/app/connect/meta", s.requireUser, s.startUserOAuthRedirect)
+	s.App.Post("/app/api/connections/:id/sync", s.requireUser, s.requireCSRF, s.syncUserConnection)
+	s.App.Post("/app/api/batches", s.requireUser, s.requireCSRF, s.createUserBatch)
+	s.App.Post("/app/api/rules", s.requireUser, s.requireCSRF, s.createUserRule)
+	s.App.Post("/app/api/rules/:id/enable", s.requireUser, s.requireCSRF, s.enableUserRule)
+	s.App.Post("/app/api/rules/:id/disable", s.requireUser, s.requireCSRF, s.disableUserRule)
+	s.App.Post("/app/api/media", s.requireUser, s.requireCSRF, s.createMedia)
 
 	v1 := s.App.Group("/v1", s.authenticate)
 	v1.Post("/oauth/sessions", s.startOAuth)
 	v1.Get("/connections", s.listConnections)
 	v1.Get("/connections/:id", s.getConnection)
+	v1.Delete("/connections/:id", s.revokeConnection)
 	v1.Post("/connections/:id/sync", s.syncConnection)
 	v1.Get("/ad-accounts", s.listAdAccounts)
 	v1.Get("/ad-accounts/:id/campaign-audit", s.auditAdAccount)
@@ -219,6 +248,10 @@ func (s *Server) handleError(c fiber.Ctx, err error) error {
 	case errors.Is(err, application.ErrUnauthorized):
 		status, code, message = http.StatusUnauthorized, "unauthorized", "valid bearer credentials are required"
 		c.Set("WWW-Authenticate", `Bearer realm="raze-posting"`)
+	case errors.Is(err, application.ErrInvalidCredentials):
+		status, code, message = http.StatusUnauthorized, "invalid_credentials", "invalid login or password"
+	case errors.Is(err, application.ErrSessionExpired):
+		status, code, message = http.StatusUnauthorized, "session_expired", "sign in to continue"
 	case errors.Is(err, database.ErrOAuthSessionUnavailable):
 		status, code, message = http.StatusBadRequest, "oauth_session_unavailable", "OAuth session is missing, expired, or already used"
 	case errors.Is(err, gorm.ErrRecordNotFound):

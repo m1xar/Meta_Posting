@@ -94,7 +94,7 @@ func Load() (Config, error) {
 			APIVersion:     envOr("META_API_VERSION", defaultGraphAPIVersion),
 			RedirectURI:    strings.TrimSpace(os.Getenv("META_OAUTH_REDIRECT_URI")),
 			LoginConfigID:  strings.TrimSpace(os.Getenv("META_LOGIN_CONFIG_ID")),
-			Scopes:         splitCSV(envOr("META_OAUTH_SCOPES", "ads_management,ads_read,business_management,pages_show_list,pages_read_engagement,pages_manage_ads")),
+			Scopes:         splitCSV(envOr("META_OAUTH_SCOPES", "ads_management,ads_read,business_management,pages_show_list,pages_read_engagement")),
 			RequestTimeout: requestTimeout,
 			UploadTimeout:  uploadTimeout,
 		},
