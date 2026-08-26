@@ -170,7 +170,10 @@ func (r *InventoryRepository) ListAdAccounts(ctx context.Context, filter AdAccou
 		return domain.Page[domain.AdAccount]{}, err
 	}
 	var items []domain.AdAccount
-	if err := applyPage(query.Order("name ASC, id ASC"), page.Limit, page.Offset).Find(&items).Error; err != nil {
+	// The raw Graph payload dwarfs every other column - hundreds of accounts
+	// times a few KB each is megabytes the list consumers never look at.
+	// Callers that need it (permission checks) fetch one account by ID.
+	if err := applyPage(query.Omit("raw_json").Order("name ASC, id ASC"), page.Limit, page.Offset).Find(&items).Error; err != nil {
 		return domain.Page[domain.AdAccount]{}, err
 	}
 	return domain.Page[domain.AdAccount]{Items: items, Total: total, Limit: page.Limit, Offset: page.Offset}, nil
@@ -251,7 +254,9 @@ func (r *InventoryRepository) ListAssets(ctx context.Context, filter AssetFilter
 		return domain.Page[domain.Asset]{}, err
 	}
 	var items []domain.Asset
-	if err := applyPage(query.Order("asset_type ASC, name ASC, id ASC"), page.Limit, page.Offset).Find(&items).Error; err != nil {
+	// Raw Graph payloads stay out of list responses; the launcher only needs
+	// identity and status fields.
+	if err := applyPage(query.Omit("raw_json").Order("asset_type ASC, name ASC, id ASC"), page.Limit, page.Offset).Find(&items).Error; err != nil {
 		return domain.Page[domain.Asset]{}, err
 	}
 	return domain.Page[domain.Asset]{Items: items, Total: total, Limit: page.Limit, Offset: page.Offset}, nil

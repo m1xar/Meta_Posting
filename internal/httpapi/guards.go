@@ -152,14 +152,45 @@ const (
 	campaignSourceDiscovered = "discovered"
 )
 
+// campaignMetrics is the lifetime Facebook roll-up a row actually renders.
+// The full snapshot rows carry flattened metric maps and raw Graph payloads;
+// serializing those for a thousand campaigns is megabytes nobody reads.
+type campaignMetrics struct {
+	Spend       float64 `json:"spend"`
+	Impressions int64   `json:"impressions"`
+	Clicks      int64   `json:"clicks"`
+}
+
+// trackerMetrics is the Keitaro roll-up without its raw report row.
+type trackerMetrics struct {
+	Clicks       int64   `json:"clicks"`
+	UniqueClicks int64   `json:"unique_clicks"`
+	Leads        float64 `json:"leads"`
+	Sales        float64 `json:"sales"`
+	Revenue      float64 `json:"revenue"`
+}
+
+func trackerView(stat *domain.TrackerStat) *trackerMetrics {
+	if stat == nil {
+		return nil
+	}
+	return &trackerMetrics{
+		Clicks:       stat.Clicks,
+		UniqueClicks: stat.UniqueClicks,
+		Leads:        stat.Leads,
+		Sales:        stat.Sales,
+		Revenue:      stat.Revenue,
+	}
+}
+
 // campaignView is one campaign row for the UI: the campaign joined with its
 // lifetime insights, tracker roll-up, guard, and checkpoint outcomes.
 type campaignView struct {
-	Campaign campaignSummary         `json:"campaign"`
-	Insights *domain.InsightSnapshot `json:"insights,omitempty"`
-	Tracker  *domain.TrackerStat     `json:"tracker,omitempty"`
-	Guard    *domain.CampaignGuard   `json:"guard,omitempty"`
-	Checks   []domain.GuardCheck     `json:"checks,omitempty"`
+	Campaign campaignSummary       `json:"campaign"`
+	Insights *campaignMetrics      `json:"insights,omitempty"`
+	Tracker  *trackerMetrics       `json:"tracker,omitempty"`
+	Guard    *domain.CampaignGuard `json:"guard,omitempty"`
+	Checks   []domain.GuardCheck   `json:"checks,omitempty"`
 }
 
 type campaignTotals struct {
@@ -227,7 +258,9 @@ func (s *Server) campaignViews(c fiber.Ctx, adAccountID *uuid.UUID) ([]campaignV
 		query = query.Where("published_objects.ad_account_id = ?", *adAccountID)
 	}
 	var published []domain.PublishedObject
-	if err := query.Order("created_at DESC, id DESC").Limit(1000).Find(&published).Error; err != nil {
+	if err := query.
+		Select("id, created_at, connection_id, ad_account_id, batch_id, meta_object_id, name, effective_status").
+		Order("created_at DESC, id DESC").Limit(1000).Find(&published).Error; err != nil {
 		return nil, totals, err
 	}
 
@@ -238,7 +271,9 @@ func (s *Server) campaignViews(c fiber.Ctx, adAccountID *uuid.UUID) ([]campaignV
 		entityQuery = entityQuery.Where("ad_entities.ad_account_id = ?", *adAccountID)
 	}
 	var entities []domain.AdEntity
-	if err := entityQuery.Order("meta_created_time DESC NULLS LAST, created_at DESC").Limit(2000).Find(&entities).Error; err != nil {
+	if err := entityQuery.
+		Select("id, created_at, connection_id, ad_account_id, meta_object_id, name, effective_status, objective, meta_created_time, published_object_id").
+		Order("meta_created_time DESC NULLS LAST, created_at DESC").Limit(2000).Find(&entities).Error; err != nil {
 		return nil, totals, err
 	}
 
@@ -286,10 +321,14 @@ func (s *Server) campaignViews(c fiber.Ctx, adAccountID *uuid.UUID) ([]campaignV
 		return nil, totals, err
 	}
 
-	snapshotByObject := make(map[uuid.UUID]*domain.InsightSnapshot, len(snapshots))
+	snapshotByObject := make(map[uuid.UUID]*campaignMetrics, len(snapshots))
 	for index := range snapshots {
 		if snapshots[index].PublishedObjectID != nil {
-			snapshotByObject[*snapshots[index].PublishedObjectID] = &snapshots[index]
+			snapshotByObject[*snapshots[index].PublishedObjectID] = &campaignMetrics{
+				Spend:       snapshots[index].Spend,
+				Impressions: snapshots[index].Impressions,
+				Clicks:      snapshots[index].Clicks,
+			}
 		}
 	}
 	checksByObject := make(map[uuid.UUID][]domain.GuardCheck)
@@ -334,9 +373,9 @@ func (s *Server) campaignViews(c fiber.Ctx, adAccountID *uuid.UUID) ([]campaignV
 			view.Insights = dailyTotals[campaign.MetaObjectID]
 		}
 		if tracker, ok := trackerByObject[campaign.ID]; ok {
-			view.Tracker = tracker
+			view.Tracker = trackerView(tracker)
 		} else {
-			view.Tracker = trackerByMeta[campaign.MetaObjectID]
+			view.Tracker = trackerView(trackerByMeta[campaign.MetaObjectID])
 		}
 		view.Checks = checksByObject[campaign.ID]
 		if guard, ok := guardByObject[campaign.ID]; ok {
@@ -364,7 +403,7 @@ func (s *Server) campaignViews(c fiber.Ctx, adAccountID *uuid.UUID) ([]campaignV
 			CreatedAt:       createdAt,
 		}}
 		view.Insights = dailyTotals[entity.MetaObjectID]
-		view.Tracker = trackerByMeta[entity.MetaObjectID]
+		view.Tracker = trackerView(trackerByMeta[entity.MetaObjectID])
 		views = append(views, view)
 		totals.add(view)
 	}
@@ -373,9 +412,9 @@ func (s *Server) campaignViews(c fiber.Ctx, adAccountID *uuid.UUID) ([]campaignV
 
 // dailyCampaignTotals rolls the account-wide daily rows up to one lifetime
 // figure per campaign, shaped as a snapshot so rows render the same way.
-func (s *Server) dailyCampaignTotals(c fiber.Ctx, metaIDs []string) (map[string]*domain.InsightSnapshot, error) {
+func (s *Server) dailyCampaignTotals(c fiber.Ctx, metaIDs []string) (map[string]*campaignMetrics, error) {
 	if len(metaIDs) == 0 {
-		return map[string]*domain.InsightSnapshot{}, nil
+		return map[string]*campaignMetrics{}, nil
 	}
 	type rollup struct {
 		MetaObjectID string
@@ -393,15 +432,13 @@ func (s *Server) dailyCampaignTotals(c fiber.Ctx, metaIDs []string) (map[string]
 		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	result := make(map[string]*domain.InsightSnapshot, len(rows))
+	result := make(map[string]*campaignMetrics, len(rows))
 	for index := range rows {
 		row := rows[index]
-		result[row.MetaObjectID] = &domain.InsightSnapshot{
-			MetaObjectID: row.MetaObjectID,
-			Level:        domain.InsightCampaign,
-			Spend:        row.Spend,
-			Impressions:  row.Impressions,
-			Clicks:       row.Clicks,
+		result[row.MetaObjectID] = &campaignMetrics{
+			Spend:       row.Spend,
+			Impressions: row.Impressions,
+			Clicks:      row.Clicks,
 		}
 	}
 	return result, nil

@@ -182,8 +182,12 @@ func (r *InsightRepository) LatestForObjects(ctx context.Context, objectIDs []uu
 		return nil, nil
 	}
 	var snapshots []domain.InsightSnapshot
+	// Identity and headline counters only: the flattened metric map and raw
+	// rows would multiply the scan by orders of magnitude at this fan-out.
 	err := r.db.WithContext(ctx).
-		Raw(`SELECT DISTINCT ON (published_object_id) *
+		Raw(`SELECT DISTINCT ON (published_object_id)
+		            id, published_object_id, connection_id, meta_object_id, level,
+		            spend, impressions, clicks, window_end, fetched_at
 		     FROM insight_snapshots
 		     WHERE published_object_id IN ?
 		     ORDER BY published_object_id, window_end DESC, id DESC`, objectIDs).
