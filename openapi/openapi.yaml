@@ -2,19 +2,20 @@ openapi: 3.1.0
 jsonSchemaDialect: https://spec.openapis.org/oas/3.1/dialect/base
 info:
   title: Raze Posting API
-  version: 0.1.0
-  summary: Internal API for multi-account Meta campaign publishing and tracking
+  version: 0.2.0
+  summary: Multi-tenant Meta campaign publishing with tracker-driven guard rules
   description: |
-    API-only internal service for official Meta OAuth, advertising inventory
-    discovery, asynchronous multi-account publishing, persisted Insights, and
-    pause-only automation rules.
+    Raze Posting connects Meta users through official Facebook Login for
+    Business, publishes one campaign hierarchy to many ad accounts, collects
+    lifetime Insights, merges per-campaign registration/deposit statistics from
+    a Keitaro tracker, and pauses campaigns automatically through
+    spend-checkpoint guards.
 
-    Except for health/readiness, the served OpenAPI document, and the Meta OAuth
-    callback, callers authenticate with the administrator bearer token. Meta
-    user access tokens are obtained only through OAuth and are never returned.
-
-    Instant Forms/lead retrieval, messaging destinations, and catalogs are
-    outside this version's scope.
+    All workspace endpoints under `/app/api` authenticate with the HttpOnly
+    session cookie issued by `/auth/login` or `/auth/register`. Mutating
+    requests additionally require the `X-CSRF-Token` header carrying the value
+    of the non-HttpOnly `raze_csrf` cookie. Meta access tokens are never
+    returned by this API and are encrypted at rest.
   contact:
     email: mike@watchers-factory.com
   license:
@@ -28,3268 +29,562 @@ servers:
 tags:
   - name: System
     description: Liveness, readiness, and API-contract endpoints.
+  - name: Auth
+    description: Operator registration, sign-in, and session logout.
   - name: OAuth
-    description: Official Meta OAuth session and callback flow.
-  - name: Connections
-    description: Connected Meta users and inventory synchronization.
-  - name: Inventory
-    description: Discovered ad accounts and advertising assets.
+    description: Official Meta OAuth connect flow.
+  - name: Workspace
+    description: Session-scoped overview, launcher, and account data.
+  - name: Campaigns
+    description: Published campaigns with insights, tracker stats, and guards.
+  - name: Guards
+    description: Spend-checkpoint automation replacing free-form rules.
+  - name: Batches
+    description: Multi-account publishing batches.
   - name: Media
     description: Persistent local image and video uploads.
-  - name: Capabilities
-    description: Typed campaign and rule vocabulary.
-  - name: Batches
-    description: Asynchronous multi-account hierarchy publishing.
-  - name: Rules
-    description: Pause-only automation configuration and evaluation history.
-  - name: Insights
-    description: Persisted Meta Insights snapshots.
-  - name: Jobs
-    description: Asynchronous worker jobs.
-security:
-  - bearerAuth: []
+
+security: []
+
 paths:
   /healthz:
     get:
       tags: [System]
-      operationId: getHealth
-      summary: Process liveness
-      security: []
+      summary: Liveness probe
       responses:
         "200":
-          description: The API process is alive.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Health"
-        "500":
-          $ref: "#/components/responses/InternalError"
+          description: Process is alive.
   /readyz:
     get:
       tags: [System]
-      operationId: getReadiness
-      summary: Service readiness
-      description: Checks dependencies required to accept API traffic.
-      security: []
+      summary: Readiness probe
       responses:
         "200":
-          description: The service is ready.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Health"
+          description: Database is reachable.
         "503":
-          $ref: "#/components/responses/ServiceUnavailable"
+          description: A dependency is unavailable.
   /openapi.yaml:
     get:
       tags: [System]
-      operationId: getOpenAPI
-      summary: Download this API contract
-      security: []
+      summary: This OpenAPI document
       responses:
         "200":
-          description: OpenAPI 3.1 YAML.
-          content:
-            application/yaml:
-              schema:
-                type: string
-            text/yaml:
-              schema:
-                type: string
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /docs:
+          description: The API contract in YAML form.
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Create an operator account and start a session
+      requestBody:
+        $ref: "#/components/requestBodies/Credentials"
+      responses:
+        "201":
+          description: Account created; session and CSRF cookies are set.
+        "400":
+          $ref: "#/components/responses/Invalid"
+        "409":
+          description: Login is already taken.
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Sign in and start a session
+      requestBody:
+        $ref: "#/components/requestBodies/Credentials"
+      responses:
+        "200":
+          description: Session and CSRF cookies are set.
+        "401":
+          description: Invalid login or password.
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: End the current session
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+      responses:
+        "204":
+          description: Session removed and cookies cleared.
+
+  /app/connect/meta:
     get:
-      tags: [System]
-      operationId: getSwaggerUI
-      summary: Interactive Swagger UI
-      description: Browser UI backed by the current `/openapi.yaml` contract.
-      security: []
+      tags: [OAuth]
+      summary: Redirect the operator's browser into Facebook Login for Business
+      security:
+        - session: []
       responses:
-        "200":
-          description: Swagger UI HTML page.
-          content:
-            text/html:
-              schema:
-                type: string
+        "303":
+          description: Redirect to Meta's authorization dialog.
   /oauth/facebook/callback:
     get:
       tags: [OAuth]
-      operationId: handleFacebookOAuthCallback
-      summary: Consume Meta's OAuth redirect
-      description: |
-        Public browser callback registered in the Meta app. Replay protection
-        comes from the short-lived, one-time `state` generated by
-        `POST /v1/oauth/sessions`. The response never contains a Meta token.
-      security: []
+      summary: Meta redirect target completing a connection
+      description: Public because Meta redirects the browser here; protected by
+        the short-lived one-time OAuth state bound to the initiating user.
       parameters:
-        - name: code
-          in: query
-          description: Authorization code returned after a successful login.
-          schema:
-            type: string
         - name: state
           in: query
-          description: One-time opaque OAuth state.
-          required: true
-          schema:
-            type: string
-            minLength: 1
-        - name: error
+          schema: { type: string }
+        - name: code
           in: query
-          schema:
-            type: string
-        - name: error_reason
-          in: query
-          schema:
-            type: string
-        - name: error_description
-          in: query
-          schema:
-            type: string
+          schema: { type: string }
       responses:
         "200":
-          description: The connection was recorded.
+          description: Connection created; browsers are redirected to /app.
+        "400":
+          description: Denied, expired, or replayed OAuth state.
+
+  /app/api/overview:
+    get:
+      tags: [Workspace]
+      summary: Dashboard payload
+      description: Connections, ad accounts, batches, campaign views, and
+        aggregate totals for the signed-in user.
+      security:
+        - session: []
+      responses:
+        "200":
+          description: Overview snapshot.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OAuthCallbackResult"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "500":
-          $ref: "#/components/responses/InternalError"
-        "502":
-          $ref: "#/components/responses/BadGateway"
-        "504":
-          $ref: "#/components/responses/GatewayTimeout"
-  /v1/oauth/sessions:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  connections:
+                    type: array
+                    items: { $ref: "#/components/schemas/MetaConnection" }
+                  ad_accounts:
+                    type: array
+                    items: { $ref: "#/components/schemas/AdAccount" }
+                  batches:
+                    type: array
+                    items: { $ref: "#/components/schemas/Batch" }
+                  campaigns:
+                    type: array
+                    items: { $ref: "#/components/schemas/CampaignView" }
+                  totals: { $ref: "#/components/schemas/CampaignTotals" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /app/api/launcher:
+    get:
+      tags: [Workspace]
+      summary: Launcher payload (connections, accounts, Pages, capabilities)
+      security:
+        - session: []
+      responses:
+        "200":
+          description: Everything the launcher form needs.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /app/api/capabilities:
+    get:
+      tags: [Workspace]
+      summary: Typed campaign vocabulary and guard metric names
+      security:
+        - session: []
+      responses:
+        "200":
+          description: Capability document.
+  /app/api/accounts/{id}/stats:
+    get:
+      tags: [Workspace]
+      summary: One ad account with its campaigns and aggregate totals
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200":
+          description: Account, campaign views, and totals.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /app/api/connections/{id}/sync:
     post:
-      tags: [OAuth]
-      operationId: createOAuthSession
-      summary: Start an official Meta OAuth session
-      description: |
-        Creates a 30-minute, single-use state and returns the Meta authorization
-        URL to open in the intended user's browser.
+      tags: [Workspace]
+      summary: Queue inventory discovery for one connection
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/CSRF"
+      responses:
+        "202":
+          description: Sync job accepted; poll the batch/connection state.
+  /app/api/connections/{id}:
+    delete:
+      tags: [Workspace]
+      summary: Revoke one Meta connection
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/CSRF"
+      responses:
+        "204":
+          description: Connection revoked.
+
+  /app/api/campaigns:
+    get:
+      tags: [Campaigns]
+      summary: Every published campaign with metrics, tracker stats, and guards
+      security:
+        - session: []
+      responses:
+        "200":
+          description: Campaign views and totals.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  campaigns:
+                    type: array
+                    items: { $ref: "#/components/schemas/CampaignView" }
+                  totals: { $ref: "#/components/schemas/CampaignTotals" }
+  /app/api/campaigns/{id}/pause:
+    post:
+      tags: [Campaigns]
+      summary: Pause one campaign on Meta
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/CSRF"
+      responses:
+        "200":
+          description: Campaign paused.
+  /app/api/campaigns/{id}/resume:
+    post:
+      tags: [Campaigns]
+      summary: Resume one campaign on Meta
+      description: Failed guard checks become overridden so the next guard pass
+        does not immediately pause the campaign again; later checkpoints still
+        apply.
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/CSRF"
+      responses:
+        "200":
+          description: Campaign activated.
+  /app/api/campaigns/{id}/guard:
+    post:
+      tags: [Guards]
+      summary: Create a campaign-scoped guard overriding the batch guard
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/CSRF"
       requestBody:
-        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GuardUpdate" }
+      responses:
+        "201":
+          description: Guard created for this campaign only.
+  /app/api/guards/{id}:
+    patch:
+      tags: [Guards]
+      summary: Edit a live guard's checkpoints, name, status, or interval
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GuardUpdate" }
+      responses:
+        "200":
+          description: Updated guard.
+
+  /app/api/batches:
+    post:
+      tags: [Batches]
+      summary: Queue one hierarchy to many ad accounts with optional guard
+      description: Accepted means persisted, not published. Every account gets
+        its own result row; successful accounts stay published when others
+        fail. Objects are created paused and activated bottom-up unless
+        `leave_paused` is set.
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateOAuthSessionRequest"
-      responses:
-        "201":
-          description: OAuth session created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CreateOAuthSessionResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/InternalError"
-  /v1/connections:
-    get:
-      tags: [Connections]
-      operationId: listConnections
-      summary: List connected Meta users
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: status
-          in: query
-          schema:
-            $ref: "#/components/schemas/ConnectionStatus"
-        - name: search
-          in: query
-          description: Case-insensitive match against name, email, or Meta user ID.
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Paginated connections.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ConnectionPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/connections/{id}:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    get:
-      tags: [Connections]
-      operationId: getConnection
-      summary: Get one Meta connection
-      responses:
-        "200":
-          description: Connection.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Connection"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    delete:
-      tags: [Connections]
-      operationId: revokeConnection
-      summary: Revoke a Meta connection and its consent grant
-      description: |
-        Revokes the current person's Meta grant before marking the local
-        connection revoked. Reconnect through OAuth to establish a fresh
-        consent grant with the currently configured permissions.
-      responses:
-        "204":
-          description: Connection grant revoked.
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "502":
-          $ref: "#/components/responses/BadGateway"
-        "504":
-          $ref: "#/components/responses/GatewayTimeout"
-  /v1/connections/{id}/sync:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    post:
-      tags: [Connections]
-      operationId: syncConnection
-      summary: Queue inventory synchronization
-      description: |
-        Persists a synchronization job. A successful response means the job was
-        accepted, not that Meta inventory is already current.
+              type: object
+              required: [batch]
+              properties:
+                batch: { $ref: "#/components/schemas/CreateBatch" }
+                checkpoints:
+                  type: array
+                  items: { $ref: "#/components/schemas/GuardCheckpoint" }
+                guard_name: { type: string }
       responses:
         "202":
-          description: Synchronization queued.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Job"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /v1/ad-accounts:
+          description: Batch queued (and guard created when checkpoints given).
+  /app/api/batches/{id}:
     get:
-      tags: [Inventory]
-      operationId: listAdAccounts
-      summary: List discovered ad accounts
+      tags: [Batches]
+      summary: One batch with its per-account results
+      security:
+        - session: []
       parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: connection_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: business_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: account_status
-          in: query
-          description: Numeric Meta account status.
-          schema:
-            type: integer
-        - name: currency
-          in: query
-          description: ISO-style account currency code, for example `USD`.
-          schema:
-            type: string
-            minLength: 3
-            maxLength: 3
-        - name: active_only
-          in: query
-          description: Return only accounts still accessible through the connection. Defaults to true.
-          schema:
-            type: boolean
-            default: true
-        - name: search
-          in: query
-          description: Case-insensitive name or account-ID match.
-          schema:
-            type: string
+        - $ref: "#/components/parameters/ID"
       responses:
         "200":
-          description: Paginated ad accounts.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdAccountPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/ad-accounts/{id}/campaign-audit:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    get:
-      tags: [Inventory]
-      operationId: auditAdAccountCampaigns
-      summary: Read live campaign structures from Meta
-      description: |
-        Fetches campaigns, ad sets, ads, and creative details directly from
-        Meta for buyer-side inspection. Defaults to objects with effective
-        status `ACTIVE`.
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - name: effective_status
-          in: query
-          description: Comma-separated Meta effective statuses. Defaults to `ACTIVE`.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              type: string
-              examples: [ACTIVE, PAUSED]
-      responses:
-        "200":
-          description: Live Meta campaign structures for the selected ad account.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdAccountCampaignAudit"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "502":
-          $ref: "#/components/responses/BadGateway"
-        "504":
-          $ref: "#/components/responses/GatewayTimeout"
-  /v1/assets:
-    get:
-      tags: [Inventory]
-      operationId: listAssets
-      summary: List discovered assets
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: connection_id
-          in: query
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: business_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: ad_account_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: types
-          in: query
-          description: Comma-separated asset types.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              $ref: "#/components/schemas/AssetType"
-        - name: active_only
-          in: query
-          schema:
-            type: boolean
-            default: true
-        - name: search
-          in: query
-          description: Case-insensitive name or Meta-ID match.
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Paginated assets.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AssetPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/media:
+          description: Batch and account results.
+
+  /app/api/media:
     post:
       tags: [Media]
-      operationId: uploadMedia
-      summary: Store image or video media
-      description: |
-        Stores one file in the persistent local upload directory. Supplying a
-        connection/account scopes ownership but does not upload the file to
-        Meta. A publishing batch uploads bound media independently to each
-        selected account.
+      summary: Upload a local image or video for later publishing
+      security:
+        - session: []
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
       requestBody:
         required: true
         content:
           multipart/form-data:
             schema:
               type: object
-              additionalProperties: false
-              required: [file, kind]
+              required: [kind, file]
               properties:
-                file:
-                  type: string
-                  format: binary
-                connection_id:
-                  type: string
-                  format: uuid
-                ad_account_id:
-                  type: string
-                  format: uuid
-                kind:
-                  $ref: "#/components/schemas/MediaKind"
+                connection_id: { type: string, format: uuid }
+                ad_account_id: { type: string, format: uuid }
+                kind: { type: string, enum: [image, video] }
+                file: { type: string, format: binary }
       responses:
         "201":
-          description: File stored and ready for use in a batch media binding.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Media"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "413":
-          description: Upload exceeds the configured request limit.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "415":
-          description: Unsupported media type.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-    get:
-      tags: [Media]
-      operationId: listMedia
-      summary: List uploaded media
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: connection_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: ad_account_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: kind
-          in: query
-          schema:
-            $ref: "#/components/schemas/MediaKind"
-        - name: status
-          in: query
-          schema:
-            $ref: "#/components/schemas/MediaStatus"
-      responses:
-        "200":
-          description: Paginated media.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MediaPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/media/{id}:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    get:
-      tags: [Media]
-      operationId: getMedia
-      summary: Get one media item
-      responses:
-        "200":
-          description: Media item.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Media"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /v1/capabilities:
-    get:
-      tags: [Capabilities]
-      operationId: getCapabilities
-      summary: Get typed campaign-building capabilities
-      description: |
-        Returns the vocabulary modeled by this API. Meta can still reject a
-        combination based on account capabilities, permissions, policy,
-        country, billing, or API-version rules.
-      responses:
-        "200":
-          description: Campaign-building capabilities.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Capabilities"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/batches:
-    post:
-      tags: [Batches]
-      operationId: createBatch
-      summary: Queue a multi-account publishing batch
-      description: |
-        Persists one batch and one independent result per selected ad account.
-        The idempotency key is scoped to the connection. A successful response
-        means publishing was queued, not completed.
+          description: Stored media record.
 
-        Money integers in campaign/ad-set payloads are minor units in each
-        selected account's own currency. The service does not convert currency.
-        Per-account overrides are deep-merged onto the base hierarchy.
-      parameters:
-        - name: Idempotency-Key
-          in: header
-          description: Fallback when `idempotency_key` is omitted from JSON.
-          schema:
-            type: string
-            minLength: 1
-            maxLength: 255
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateBatchRequest"
-            examples:
-              webSalesImage:
-                summary: Website registration campaign to two accounts
-                value:
-                  connection_id: 4df2176c-c676-419c-a1e5-fffd2072bddd
-                  name: UAE web registrations
-                  ad_account_ids:
-                    - 0adfd7bf-2471-4b0c-ac25-c32d0ec6f4c8
-                    - 24d05bcb-19c0-45c9-af4a-cb64ec42f5c3
-                  idempotency_key: launch-2026-07-23-a
-                  validate_only: false
-                  leave_paused: false
-                  hierarchy:
-                    campaign:
-                      name: UAE | Web | Registration
-                      objective: OUTCOME_SALES
-                      special_ad_categories: [ONLINE_GAMBLING_AND_GAMING]
-                    ad_set:
-                      name: AE | Broad | 21+
-                      destination_type: WEBSITE
-                      optimization_goal: OFFSITE_CONVERSIONS
-                      billing_event: IMPRESSIONS
-                      daily_budget: 10000
-                      promoted_object:
-                        pixel_id: "1234567890"
-                        custom_event_type: COMPLETE_REGISTRATION
-                      targeting:
-                        age_min: 21
-                        age_max: 65
-                        geo_locations:
-                          countries: [AE]
-                    creative:
-                      name: Image A
-                      object_story_spec:
-                        page_id: "1234567890"
-                        instagram_user_id: "2345678901"
-                        link_data:
-                          link: https://example.invalid/landing
-                          message: Primary text
-                          name: Headline
-                    ad:
-                      name: Image A
-                      conversion_domain: example.invalid
-                  media_bindings:
-                    - media_id: f7512ca6-c19a-410a-abf8-ff58b37a5afe
-                      target: /creative/object_story_spec/link_data/image_hash
-                  account_overrides:
-                    24d05bcb-19c0-45c9-af4a-cb64ec42f5c3:
-                      ad_set:
-                        daily_budget: 25000
-      responses:
-        "202":
-          description: Batch accepted for asynchronous publishing.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Batch"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-    get:
-      tags: [Batches]
-      operationId: listBatches
-      summary: List publishing batches
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: connection_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: statuses
-          in: query
-          description: Comma-separated batch statuses.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              $ref: "#/components/schemas/BatchStatus"
-      responses:
-        "200":
-          description: Paginated batches.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BatchPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/batches/{id}:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    get:
-      tags: [Batches]
-      operationId: getBatch
-      summary: Get one publishing batch
-      responses:
-        "200":
-          description: Batch.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Batch"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /v1/batches/{id}/results:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    get:
-      tags: [Batches]
-      operationId: listBatchResults
-      summary: List per-account results for a batch
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: statuses
-          in: query
-          description: Comma-separated per-account statuses.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              $ref: "#/components/schemas/BatchAccountStatus"
-      responses:
-        "200":
-          description: Paginated account results.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BatchAccountResultPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /v1/published-objects:
-    get:
-      tags: [Batches]
-      operationId: listPublishedObjects
-      summary: List campaign hierarchy objects created by batches
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: batch_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: ad_account_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: object_types
-          in: query
-          description: Comma-separated object types.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              $ref: "#/components/schemas/PublishedObjectType"
-      responses:
-        "200":
-          description: Paginated published objects.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PublishedObjectPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/rules:
-    post:
-      tags: [Rules]
-      operationId: createRule
-      summary: Create a pause automation rule
-      description: |
-        Creates a stored rule. Only the `pause` action is accepted. Use
-        `disabled` while validating a new configuration.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreateRuleRequest"
-      responses:
-        "201":
-          description: Rule created.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    get:
-      tags: [Rules]
-      operationId: listRules
-      summary: List automation rules
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: connection_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: ad_account_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: batch_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: statuses
-          in: query
-          description: Comma-separated rule statuses.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              $ref: "#/components/schemas/RuleStatus"
-      responses:
-        "200":
-          description: Paginated rules.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRulePage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/rules/{id}:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    get:
-      tags: [Rules]
-      operationId: getRule
-      summary: Get one automation rule
-      responses:
-        "200":
-          description: Rule.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    patch:
-      tags: [Rules]
-      operationId: updateRule
-      summary: Update rule configuration
-      description: Scheduling/history timestamps maintained by the worker are read-only.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateRuleRequest"
-      responses:
-        "200":
-          description: Updated rule.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /v1/rules/{id}/enable:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    post:
-      tags: [Rules]
-      operationId: enableRule
-      summary: Enable scheduled evaluation
-      responses:
-        "200":
-          description: Enabled rule.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-  /v1/rules/{id}/disable:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    post:
-      tags: [Rules]
-      operationId: disableRule
-      summary: Disable scheduled evaluation
-      responses:
-        "200":
-          description: Disabled rule.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutomationRule"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /v1/rules/{id}/evaluations:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    get:
-      tags: [Rules]
-      operationId: listRuleEvaluations
-      summary: List a rule's evaluation audit records
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: published_object_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: statuses
-          in: query
-          description: Comma-separated evaluation statuses.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              $ref: "#/components/schemas/RuleEvaluationStatus"
-      responses:
-        "200":
-          description: Paginated evaluation records.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RuleEvaluationPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-  /v1/insights:
-    get:
-      tags: [Insights]
-      operationId: listInsights
-      summary: Query persisted Insight snapshots
-      description: |
-        Returns stored snapshots only. The `fetched_at` timestamp communicates
-        freshness; this read does not force a synchronous Meta request.
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: connection_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: ad_account_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: published_object_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: meta_object_id
-          in: query
-          schema:
-            type: string
-        - name: level
-          in: query
-          schema:
-            $ref: "#/components/schemas/InsightLevel"
-        - name: window_start
-          in: query
-          description: Include snapshots whose window overlaps this instant or later.
-          schema:
-            type: string
-            format: date-time
-        - name: window_end
-          in: query
-          description: Include snapshots whose window overlaps this instant or earlier.
-          schema:
-            type: string
-            format: date-time
-      responses:
-        "200":
-          description: Paginated persisted snapshots.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/InsightSnapshotPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/jobs:
-    get:
-      tags: [Jobs]
-      operationId: listJobs
-      summary: List asynchronous jobs
-      parameters:
-        - $ref: "#/components/parameters/Limit"
-        - $ref: "#/components/parameters/Offset"
-        - name: connection_id
-          in: query
-          schema:
-            type: string
-            format: uuid
-        - name: types
-          in: query
-          description: Comma-separated job types.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              type: string
-        - name: statuses
-          in: query
-          description: Comma-separated job statuses.
-          style: form
-          explode: false
-          schema:
-            type: array
-            items:
-              $ref: "#/components/schemas/JobStatus"
-      responses:
-        "200":
-          description: Paginated jobs.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/JobPage"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-  /v1/jobs/{id}:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    get:
-      tags: [Jobs]
-      operationId: getJob
-      summary: Get one asynchronous job
-      responses:
-        "200":
-          description: Job.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Job"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
 components:
   securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: opaque
-      description: Exact value configured in `INTERNAL_API_TOKEN`.
+    session:
+      type: apiKey
+      in: cookie
+      name: raze_session
+      description: HttpOnly session cookie issued by /auth/login.
   parameters:
     ID:
       name: id
       in: path
       required: true
-      schema:
-        type: string
-        format: uuid
-    Limit:
-      name: limit
-      in: query
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 500
-        default: 50
-    Offset:
-      name: offset
-      in: query
-      schema:
-        type: integer
-        minimum: 0
-        default: 0
+      schema: { type: string, format: uuid }
+    CSRF:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: Value of the raze_csrf cookie.
+      schema: { type: string }
+  requestBodies:
+    Credentials:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [login, password]
+            properties:
+              login:
+                type: string
+                pattern: "^[a-z0-9][a-z0-9._-]{2,63}$"
+              password:
+                type: string
+                minLength: 10
+                maxLength: 128
   responses:
-    BadRequest:
-      description: Malformed request, parameter, or JSON payload.
+    Invalid:
+      description: Validation failed.
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          schema: { $ref: "#/components/schemas/Error" }
     Unauthorized:
-      description: Missing or invalid administrator bearer token.
+      description: Session cookie is missing or expired.
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          schema: { $ref: "#/components/schemas/Error" }
     NotFound:
-      description: The requested local resource does not exist.
+      description: Resource does not exist inside this tenant.
       content:
         application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    Conflict:
-      description: The request conflicts with current resource state.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    InternalError:
-      description: Unexpected server error.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    BadGateway:
-      description: Meta rejected or could not complete the upstream request.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    GatewayTimeout:
-      description: A Meta upstream request exceeded its deadline.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
-    ServiceUnavailable:
-      description: A required dependency is unavailable.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ErrorResponse"
+          schema: { $ref: "#/components/schemas/Error" }
   schemas:
-    Health:
+    Error:
       type: object
-      additionalProperties: false
-      required: [status]
-      properties:
-        status:
-          type: string
-          examples: [ok, ready, unavailable]
-        time:
-          type: string
-          format: date-time
-        request_id:
-          type: string
-    ErrorResponse:
-      type: object
-      additionalProperties: false
-      required: [error]
       properties:
         error:
-          $ref: "#/components/schemas/APIError"
-    APIError:
-      type: object
-      additionalProperties: false
-      required: [code, message, request_id]
-      properties:
-        code:
-          type: string
-          examples: [invalid_request]
-        message:
-          type: string
-        request_id:
-          type: string
-        details:
-          description: Optional machine-readable validation or upstream context.
           type: object
-          additionalProperties: true
-    CreateOAuthSessionRequest:
-      type: object
-      additionalProperties: false
-      description: Reserved request object; the service uses configured scopes and callback.
-      properties: {}
-    CreateOAuthSessionResponse:
-      type: object
-      additionalProperties: false
-      required: [authorization_url, expires_at]
-      properties:
-        authorization_url:
-          type: string
-          format: uri
-          description: Open this URL in the intended Meta user's browser.
-        expires_at:
-          type: string
-          format: date-time
-    OAuthCallbackResult:
-      type: object
-      additionalProperties: false
-      required: [status, connection]
-      properties:
-        status:
-          type: string
-          enum: [connected]
-        connection:
-          $ref: "#/components/schemas/OAuthCompletion"
-    OAuthCompletion:
-      type: object
-      additionalProperties: false
-      required: [connection_id, meta_user_id, display_name, sync_job_id]
-      properties:
-        connection_id:
-          type: string
-          format: uuid
-        meta_user_id:
-          type: string
-        display_name:
-          type: string
-        sync_job_id:
-          type: string
-          format: uuid
-    ConnectionStatus:
-      type: string
-      enum: [active, expired, revoked, disconnected, error]
-    Connection:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - meta_user_id
-        - display_name
-        - email
-        - status
-        - granted_scopes
-        - declined_scopes
-        - metadata
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        meta_user_id:
-          type: string
-        display_name:
-          type: string
-        email:
-          type: string
-        status:
-          $ref: "#/components/schemas/ConnectionStatus"
-        token_expires_at:
-          type: [string, "null"]
-          format: date-time
-        data_access_expires_at:
-          type: [string, "null"]
-          format: date-time
-        granted_scopes:
-          type: array
-          items:
-            type: string
-        declined_scopes:
-          type: array
-          items:
-            type: string
-        last_validated_at:
-          type: [string, "null"]
-          format: date-time
-        last_synced_at:
-          type: [string, "null"]
-          format: date-time
-        last_error:
-          type: string
-        metadata:
-          type: object
-          additionalProperties: true
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    ConnectionPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
           properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Connection"
-    PageEnvelope:
+            code: { type: string }
+            message: { type: string }
+            request_id: { type: string }
+            details: { type: object }
+    User:
       type: object
-      required: [items, total, limit, offset]
       properties:
-        items:
-          type: array
-          items: {}
-        total:
-          type: integer
-          format: int64
-          minimum: 0
-        limit:
-          type: integer
-          minimum: 1
-          maximum: 500
-        offset:
-          type: integer
-          minimum: 0
+        id: { type: string, format: uuid }
+        login: { type: string }
+        last_login_at: { type: string, format: date-time }
+    MetaConnection:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        meta_user_id: { type: string }
+        display_name: { type: string }
+        status:
+          type: string
+          enum: [active, expired, revoked, disconnected, error]
+        last_synced_at: { type: string, format: date-time }
     AdAccount:
       type: object
-      additionalProperties: false
-      required:
-        - id
-        - connection_id
-        - meta_ad_account_id
-        - account_id
-        - name
-        - currency
-        - timezone_name
-        - timezone_offset_utc
-        - account_status
-        - disable_reason
-        - business_name
-        - amount_spent_minor
-        - balance_minor
-        - spend_cap_minor
-        - capabilities
-        - is_active
-        - raw
-        - last_synced_at
-        - created_at
-        - updated_at
       properties:
-        id:
-          type: string
-          format: uuid
-        connection_id:
-          type: string
-          format: uuid
-        business_id:
-          type: [string, "null"]
-          format: uuid
-        meta_ad_account_id:
-          type: string
-          description: Meta ID, normally prefixed with `act_`.
-        account_id:
-          type: string
-        name:
-          type: string
-        currency:
-          type: string
-        timezone_name:
-          type: string
-        timezone_offset_utc:
-          type: number
-        account_status:
-          type: integer
-        disable_reason:
-          type: integer
-        business_name:
-          type: string
-        amount_spent_minor:
-          type: integer
-          format: int64
-        balance_minor:
-          type: integer
-          format: int64
-        spend_cap_minor:
-          type: integer
-          format: int64
-        capabilities:
-          type: array
-          items:
-            type: string
-        is_active:
-          type: boolean
-          description: Whether the account was present in the latest complete Meta account discovery.
-        raw:
-          type: object
-          additionalProperties: true
-        last_synced_at:
-          type: string
-          format: date-time
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    AdAccountPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/AdAccount"
-    AdAccountCampaignAudit:
+        id: { type: string, format: uuid }
+        connection_id: { type: string, format: uuid }
+        meta_ad_account_id: { type: string }
+        name: { type: string }
+        currency: { type: string }
+        account_status: { type: integer }
+        is_active: { type: boolean }
+        amount_spent_minor: { type: integer }
+        balance_minor: { type: integer }
+    Batch:
       type: object
-      additionalProperties: false
-      required: [account_id, campaigns, ad_sets, ads]
       properties:
-        account_id:
-          type: string
-        campaigns:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        ad_sets:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        ads:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-    AssetType:
-      type: string
-      enum:
-        - page
-        - instagram_account
-        - pixel
-        - dataset
-        - custom_conversion
-        - custom_audience
-        - lookalike_audience
-        - meta_app
-        - post
-    Asset:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - connection_id
-        - asset_type
-        - meta_asset_id
-        - parent_meta_id
-        - name
-        - status
-        - is_active
-        - normalized
-        - raw
-        - last_synced_at
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        connection_id:
-          type: string
-          format: uuid
-        business_id:
-          type: [string, "null"]
-          format: uuid
-        ad_account_id:
-          type: [string, "null"]
-          format: uuid
-        asset_type:
-          $ref: "#/components/schemas/AssetType"
-        meta_asset_id:
-          type: string
-        parent_meta_id:
-          type: string
-        name:
-          type: string
+        id: { type: string, format: uuid }
+        connection_id: { type: string, format: uuid }
+        name: { type: string }
         status:
           type: string
-        is_active:
-          type: boolean
-        normalized:
-          type: object
-          additionalProperties: true
-        raw:
-          type: object
-          additionalProperties: true
-        last_synced_at:
-          type: string
-          format: date-time
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    AssetPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Asset"
-    MediaKind:
-      type: string
-      enum: [image, video]
-    MediaStatus:
-      type: string
-      enum: [pending, processing, ready, failed]
-    Media:
+          enum: [draft, queued, running, partially_succeeded, succeeded, failed, cancelled]
+        total_accounts: { type: integer }
+        succeeded_accounts: { type: integer }
+        failed_accounts: { type: integer }
+    CreateBatch:
       type: object
-      additionalProperties: false
-      required:
-        - id
-        - kind
-        - status
-        - original_name
-        - local_path
-        - mime_type
-        - sha256
-        - size_bytes
-        - width
-        - height
-        - duration_ms
-        - metadata
-        - created_at
-        - updated_at
+      required: [connection_id, name, ad_account_ids, idempotency_key, hierarchy]
       properties:
-        id:
-          type: string
-          format: uuid
-        connection_id:
-          type: [string, "null"]
-          format: uuid
-        ad_account_id:
-          type: [string, "null"]
-          format: uuid
-        kind:
-          $ref: "#/components/schemas/MediaKind"
-        status:
-          $ref: "#/components/schemas/MediaStatus"
-        original_name:
-          type: string
-        local_path:
-          type: string
-          description: Internal server path; not a public download URL.
-        mime_type:
-          type: string
-        sha256:
-          type: string
-          pattern: "^[0-9a-f]{64}$"
-        size_bytes:
-          type: integer
-          format: int64
-          minimum: 0
-        width:
-          type: integer
-          minimum: 0
-        height:
-          type: integer
-          minimum: 0
-        duration_ms:
-          type: integer
-          format: int64
-          minimum: 0
-        meta_image_hash:
-          type: string
-        meta_video_id:
-          type: string
-        last_error:
-          type: string
-        metadata:
-          type: object
-          additionalProperties: true
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    MediaPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Media"
-    Objective:
-      type: string
-      enum:
-        - OUTCOME_APP_PROMOTION
-        - OUTCOME_AWARENESS
-        - OUTCOME_ENGAGEMENT
-        - OUTCOME_LEADS
-        - OUTCOME_SALES
-        - OUTCOME_TRAFFIC
-    DestinationType:
-      type: string
-      enum: [WEBSITE, APP, APPLINKS_AUTOMATIC, FACEBOOK_PAGE, ON_PAGE, ON_POST]
-    CreativeFormat:
-      type: string
-      enum:
-        - single_image
-        - single_video
-        - carousel
-        - flexible_asset_feed
-        - existing_facebook_post
-        - existing_instagram_media
-    SpecialAdCategory:
-      type: string
-      enum:
-        - NONE
-        - ONLINE_GAMBLING_AND_GAMING
-        - CREDIT
-        - EMPLOYMENT
-        - FINANCIAL_PRODUCTS_SERVICES
-        - HOUSING
-        - ISSUES_ELECTIONS_POLITICS
-    BillingEvent:
-      type: string
-      enum: [IMPRESSIONS, LINK_CLICKS, CLICKS, APP_INSTALLS, THRUPLAY, PURCHASE]
-    OptimizationGoal:
-      type: string
-      enum:
-        - AD_RECALL_LIFT
-        - APP_INSTALLS
-        - APP_INSTALLS_AND_OFFSITE_CONVERSIONS
-        - AUTOMATIC_OBJECTIVE
-        - IMPRESSIONS
-        - LANDING_PAGE_VIEWS
-        - LINK_CLICKS
-        - OFFSITE_CONVERSIONS
-        - PAGE_LIKES
-        - POST_ENGAGEMENT
-        - PROFILE_AND_PAGE_ENGAGEMENT
-        - REACH
-        - THRUPLAY
-        - VALUE
-    BidStrategy:
-      type: string
-      enum:
-        - LOWEST_COST_WITHOUT_CAP
-        - LOWEST_COST_WITH_BID_CAP
-        - COST_CAP
-        - LOWEST_COST_WITH_MIN_ROAS
-    Capabilities:
-      type: object
-      additionalProperties: false
-      required:
-        - meta_api_version
-        - objectives
-        - destinations
-        - creative_formats
-        - special_ad_categories
-        - billing_events
-        - optimization_goals
-        - bid_strategies
-        - rule_operators
-        - rule_actions
-        - rule_target_levels
-        - common_rule_metrics
-        - raw_fields_supported
-        - excluded_capabilities
-      properties:
-        meta_api_version:
-          type: string
-          examples: [v25.0]
-        objectives:
-          type: array
-          items:
-            $ref: "#/components/schemas/Objective"
-        destinations:
-          type: array
-          items:
-            $ref: "#/components/schemas/DestinationType"
-        creative_formats:
-          type: array
-          items:
-            $ref: "#/components/schemas/CreativeFormat"
-        special_ad_categories:
-          type: array
-          items:
-            $ref: "#/components/schemas/SpecialAdCategory"
-        billing_events:
-          type: array
-          items:
-            $ref: "#/components/schemas/BillingEvent"
-        optimization_goals:
-          type: array
-          items:
-            $ref: "#/components/schemas/OptimizationGoal"
-        bid_strategies:
-          type: array
-          items:
-            $ref: "#/components/schemas/BidStrategy"
-        rule_actions:
-          type: array
-          items:
-            type: string
-            enum: [pause]
-        rule_operators:
-          type: array
-          items:
-            $ref: "#/components/schemas/RuleOperator"
-        rule_target_levels:
-          type: array
-          items:
-            type: string
-            enum: [campaign, adset, ad]
-        common_rule_metrics:
-          type: array
-          items:
-            type: string
-        raw_fields_supported:
-          type: boolean
-        excluded_capabilities:
-          type: array
-          items:
-            type: string
-          examples:
-            - [instant_forms, messaging, catalogs]
-    CreateBatchRequest:
-      type: object
-      additionalProperties: false
-      required:
-        - connection_id
-        - name
-        - ad_account_ids
-      oneOf:
-        - required: [hierarchy]
-        - required: [tree]
-      properties:
-        connection_id:
-          type: string
-          format: uuid
-        name:
-          type: string
-          minLength: 1
-          maxLength: 255
+        connection_id: { type: string, format: uuid }
+        name: { type: string }
         ad_account_ids:
           type: array
-          minItems: 1
-          uniqueItems: true
-          items:
-            type: string
-            format: uuid
-        idempotency_key:
-          type: string
-          minLength: 1
-          maxLength: 255
-          description: |
-            Unique within `connection_id`. Required unless supplied in the
-            `Idempotency-Key` header.
+          items: { type: string, format: uuid }
+        idempotency_key: { type: string }
         hierarchy:
-          $ref: "#/components/schemas/HierarchySpec"
-        tree:
-          $ref: "#/components/schemas/CampaignTreeSpec"
-        account_overrides:
           type: object
-          description: |
-            Keys are local ad-account UUIDs selected in `ad_account_ids`.
-            Values are arbitrary JSON Merge Patch-like objects deep-merged over
-            the selected base `hierarchy` or `tree`. Arrays and scalar values replace the base
-            value; nested objects merge recursively.
-          propertyNames:
-            format: uuid
-          additionalProperties:
-            type: object
-            additionalProperties: true
+          description: Campaign, ad set, creative, and ad specifications.
+        tree:
+          type: object
+          description: Optional multi-branch campaign tree specification.
+        account_overrides: { type: object }
         media_bindings:
           type: array
           items:
-            $ref: "#/components/schemas/MediaBinding"
-          description: |
-            Each local file is uploaded separately to every selected account,
-            then its account-specific Meta hash/ID is written at `target`.
-        validate_only:
-          type: boolean
-          default: false
-          description: |
-            Validate without creating a persistent Meta hierarchy. Campaign
-            and creative are sent to Meta with `validate_only`; ad set and ad
-            receive complete local validation because Meta requires real
-            dependency IDs to validate those two remotely.
-        leave_paused:
-          type: boolean
-          default: false
-          description: |
-            When false, activate ad, ad set, and campaign bottom-up after the
-            complete account hierarchy has been created.
-        created_by:
-          type: string
-          description: Internal actor label retained in the batch audit record.
-    MediaBinding:
+            type: object
+            properties:
+              media_id: { type: string, format: uuid }
+              target: { type: string }
+        validate_only: { type: boolean }
+        leave_paused: { type: boolean }
+    GuardCheckpoint:
       type: object
-      additionalProperties: false
-      required: [media_id, target]
+      required: [spend]
+      description: One rung of the spend ladder. When lifetime spend reaches
+        `spend`, every non-zero minimum must be met or the campaign is paused.
+        Tracker leads are Keitaro registrations; tracker sales are deposits.
       properties:
-        media_id:
-          type: string
-          format: uuid
-        target:
-          type: string
-          pattern: "^/(creative|ad_sets)/"
-          description: |
-            RFC 6901 JSON pointer. Legacy hierarchies use `/creative/...`;
-            campaign trees use paths such as
-            `/ad_sets/0/ads/0/creative/object_story_spec/link_data/image_hash`.
-    HierarchySpec:
+        spend: { type: number, exclusiveMinimum: 0 }
+        min_clicks: { type: integer, minimum: 0 }
+        min_impressions: { type: integer, minimum: 0 }
+        min_tracker_clicks: { type: integer, minimum: 0 }
+        min_tracker_leads: { type: number, minimum: 0 }
+        min_tracker_sales: { type: number, minimum: 0 }
+        min_tracker_revenue: { type: number, minimum: 0 }
+    Guard:
       type: object
-      additionalProperties: false
-      required: [campaign, ad_set, creative, ad]
+      properties:
+        id: { type: string, format: uuid }
+        connection_id: { type: string, format: uuid }
+        batch_id: { type: string, format: uuid }
+        published_object_id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [active, disabled] }
+        checkpoints:
+          type: array
+          items: { $ref: "#/components/schemas/GuardCheckpoint" }
+        evaluation_interval_seconds: { type: integer }
+        next_evaluation_at: { type: string, format: date-time }
+        last_evaluated_at: { type: string, format: date-time }
+    GuardUpdate:
+      type: object
+      properties:
+        name: { type: string }
+        status: { type: string, enum: [active, disabled] }
+        checkpoints:
+          type: array
+          items: { $ref: "#/components/schemas/GuardCheckpoint" }
+        evaluation_interval_seconds: { type: integer, minimum: 60 }
+    GuardCheck:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        guard_id: { type: string, format: uuid }
+        published_object_id: { type: string, format: uuid }
+        checkpoint_index: { type: integer }
+        checkpoint_spend: { type: number }
+        status: { type: string, enum: [passed, failed, overridden] }
+        observed: { type: object }
+        thresholds: { $ref: "#/components/schemas/GuardCheckpoint" }
+        paused: { type: boolean }
+        evaluated_at: { type: string, format: date-time }
+    TrackerStat:
+      type: object
+      description: Latest Keitaro all-time roll-up for one campaign, matched by
+        sub_id_7 (campaign id) with a sub_id_3 (campaign name) fallback.
+      properties:
+        meta_campaign_id: { type: string }
+        campaign_name: { type: string }
+        clicks: { type: integer }
+        unique_clicks: { type: integer }
+        leads: { type: number }
+        sales: { type: number }
+        revenue: { type: number }
+        last_synced_at: { type: string, format: date-time }
+    CampaignView:
+      type: object
       properties:
         campaign:
-          $ref: "#/components/schemas/CampaignSpec"
-        ad_set:
-          $ref: "#/components/schemas/AdSetSpec"
-        creative:
-          $ref: "#/components/schemas/CreativeSpec"
-        ad:
-          $ref: "#/components/schemas/AdSpec"
-    CampaignTreeSpec:
-      type: object
-      additionalProperties: false
-      required: [campaign, ad_sets]
-      properties:
-        campaign:
-          $ref: "#/components/schemas/CampaignSpec"
-        ad_sets:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            $ref: "#/components/schemas/AdSetTreeSpec"
-    AdSetTreeSpec:
-      type: object
-      additionalProperties: false
-      required: [ad_set, ads]
-      properties:
-        ad_set:
-          $ref: "#/components/schemas/AdSetSpec"
-        ads:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            $ref: "#/components/schemas/AdTreeSpec"
-    AdTreeSpec:
-      type: object
-      additionalProperties: false
-      required: [creative, ad]
-      properties:
-        creative:
-          $ref: "#/components/schemas/CreativeSpec"
-        ad:
-          $ref: "#/components/schemas/AdSpec"
-    RawFields:
-      type: object
-      description: |
-        Forward-compatibility escape hatch deep-merged over typed fields. Meta
-        field support and policy are still validated upstream. Hierarchy IDs
-        and the safe PAUSED create status remain controlled by the publisher.
-      additionalProperties: true
-    ObjectRef:
-      type: object
-      additionalProperties: false
-      required: [id]
-      properties:
-        id:
-          type: string
-        name:
-          type: string
-    CampaignSpec:
-      type: object
-      additionalProperties: false
-      required: [name, objective]
-      properties:
-        name:
-          type: string
-          minLength: 1
-        objective:
-          $ref: "#/components/schemas/Objective"
-        buying_type:
-          type: string
-        special_ad_categories:
-          type: array
-          items:
-            $ref: "#/components/schemas/SpecialAdCategory"
-          description: |
-            Use `ONLINE_GAMBLING_AND_GAMING` when the campaign is in that
-            category. This payload field does not grant advertising approval.
-        special_ad_category_country:
-          type: array
-          items:
-            type: string
-            minLength: 2
-            maxLength: 2
-        daily_budget:
-          type: integer
-          format: int64
-          minimum: 0
-          description: Minor units in the selected account's currency.
-        lifetime_budget:
-          type: integer
-          format: int64
-          minimum: 0
-          description: Minor units in the selected account's currency.
-        bid_strategy:
-          $ref: "#/components/schemas/BidStrategy"
-        spend_cap:
-          type: integer
-          format: int64
-          minimum: 0
-        start_time:
-          type: string
-          format: date-time
-        stop_time:
-          type: string
-          format: date-time
-        budget_schedule_specs:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        is_adset_budget_sharing_enabled:
-          type: boolean
-        adlabels:
-          type: array
-          items:
-            $ref: "#/components/schemas/ObjectRef"
-        raw:
-          $ref: "#/components/schemas/RawFields"
-    AttributionSpec:
-      type: object
-      additionalProperties: false
-      required: [event_type, window_days]
-      properties:
-        event_type:
-          type: string
-        window_days:
-          type: integer
-          minimum: 0
-    PromotedObject:
-      type: object
-      additionalProperties: false
-      properties:
-        pixel_id:
-          type: string
-        custom_event_type:
-          type: string
-        custom_event_str:
-          type: string
-        application_id:
-          type: string
-          description: Meta App ID of the mobile app being advertised.
-        object_store_url:
-          type: string
-          format: uri
-        offline_conversion_data_set_id:
-          type: string
-        page_id:
-          type: string
-        smart_pse_enabled:
-          type: boolean
-        raw:
-          $ref: "#/components/schemas/RawFields"
-    Targeting:
-      type: object
-      additionalProperties: false
-      properties:
-        age_min:
-          type: integer
-          minimum: 13
-          maximum: 65
-        age_max:
-          type: integer
-          minimum: 13
-          maximum: 65
-        genders:
-          type: array
-          items:
-            type: integer
-        geo_locations:
           type: object
-          additionalProperties: true
-        excluded_geo_locations:
+          description: The published campaign object with Meta ids and status.
+        insights:
           type: object
-          additionalProperties: true
-        locales:
+          description: Latest lifetime Facebook Insights snapshot.
+        tracker: { $ref: "#/components/schemas/TrackerStat" }
+        guard: { $ref: "#/components/schemas/Guard" }
+        checks:
           type: array
-          items:
-            type: integer
-        interests:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        behaviors:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        custom_audiences:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        excluded_custom_audiences:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        flexible_spec:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        exclusions:
-          type: object
-          additionalProperties: true
-        device_platforms:
-          type: array
-          items:
-            type: string
-        publisher_platforms:
-          type: array
-          items:
-            type: string
-        facebook_positions:
-          type: array
-          items:
-            type: string
-        instagram_positions:
-          type: array
-          items:
-            type: string
-        audience_network_positions:
-          type: array
-          items:
-            type: string
-        messenger_positions:
-          type: array
-          deprecated: true
-          description: Not used by this version's supported destinations.
-          items:
-            type: string
-        user_os:
-          type: array
-          items:
-            type: string
-        user_device:
-          type: array
-          items:
-            type: string
-        excluded_publisher_categories:
-          type: array
-          items:
-            type: string
-        brand_safety_content_filter_levels:
-          type: array
-          items:
-            type: string
-        advantage_audience:
-          type: integer
-        targeting_automation:
-          type: object
-          additionalProperties: true
-        threads_positions:
-          type: array
-          items:
-            type: string
-        whatsapp_positions:
-          type: array
-          items:
-            type: string
-        raw:
-          $ref: "#/components/schemas/RawFields"
-    FrequencyControlSpec:
+          items: { $ref: "#/components/schemas/GuardCheck" }
+    CampaignTotals:
       type: object
-      additionalProperties: false
-      required: [event, interval_days, max_frequency]
       properties:
-        event:
-          type: string
-        interval_days:
-          type: integer
-          minimum: 1
-        max_frequency:
-          type: integer
-          minimum: 1
-    AdSetSpec:
-      type: object
-      additionalProperties: false
-      required: [name, targeting]
-      properties:
-        name:
-          type: string
-          minLength: 1
-        billing_event:
-          $ref: "#/components/schemas/BillingEvent"
-        optimization_goal:
-          $ref: "#/components/schemas/OptimizationGoal"
-        destination_type:
-          $ref: "#/components/schemas/DestinationType"
-        daily_budget:
-          type: integer
-          format: int64
-          minimum: 0
-          description: Minor units in the selected account's currency.
-        lifetime_budget:
-          type: integer
-          format: int64
-          minimum: 0
-          description: Minor units in the selected account's currency.
-        bid_strategy:
-          $ref: "#/components/schemas/BidStrategy"
-        bid_amount:
-          type: integer
-          format: int64
-          minimum: 0
-        bid_constraints:
-          type: object
-          additionalProperties: true
-        start_time:
-          type: string
-          format: date-time
-        end_time:
-          type: string
-          format: date-time
-        targeting:
-          $ref: "#/components/schemas/Targeting"
-        promoted_object:
-          $ref: "#/components/schemas/PromotedObject"
-        attribution_spec:
-          type: array
-          items:
-            $ref: "#/components/schemas/AttributionSpec"
-        pacing_type:
-          type: array
-          items:
-            type: string
-        frequency_control_specs:
-          type: array
-          items:
-            $ref: "#/components/schemas/FrequencyControlSpec"
-        is_dynamic_creative:
-          type: boolean
-        optimization_sub_event:
-          type: string
-        daily_min_spend_target:
-          type: integer
-          format: int64
-          minimum: 0
-        daily_spend_cap:
-          type: integer
-          format: int64
-          minimum: 0
-        lifetime_min_spend_target:
-          type: integer
-          format: int64
-          minimum: 0
-        lifetime_spend_cap:
-          type: integer
-          format: int64
-          minimum: 0
-        dsa_beneficiary:
-          type: string
-        dsa_payor:
-          type: string
-        regional_regulated_categories:
-          type: array
-          items:
-            type: string
-        raw:
-          $ref: "#/components/schemas/RawFields"
-    CallToAction:
-      type: object
-      additionalProperties: false
-      required: [type]
-      properties:
-        type:
-          type: string
-        value:
-          type: object
-          additionalProperties: true
-    ChildAttachment:
-      type: object
-      additionalProperties: false
-      properties:
-        link:
-          type: string
-          format: uri
-        name:
-          type: string
-        description:
-          type: string
-        picture:
-          type: string
-          format: uri
-        image_hash:
-          type: string
-        video_id:
-          type: string
-        call_to_action:
-          $ref: "#/components/schemas/CallToAction"
-    LinkData:
-      type: object
-      additionalProperties: false
-      required: [link]
-      properties:
-        link:
-          type: string
-          format: uri
-        message:
-          type: string
-        name:
-          type: string
-        description:
-          type: string
-        caption:
-          type: string
-        picture:
-          type: string
-          format: uri
-        image_hash:
-          type: string
-        call_to_action:
-          $ref: "#/components/schemas/CallToAction"
-        child_attachments:
-          type: array
-          minItems: 2
-          items:
-            $ref: "#/components/schemas/ChildAttachment"
-          description: Presence of cards makes this a carousel creative.
-        attachment_style:
-          type: string
-        multi_share_optimized:
-          type: boolean
-        multi_share_end_card:
-          type: boolean
-    VideoData:
-      type: object
-      additionalProperties: false
-      required: [video_id]
-      properties:
-        video_id:
-          type: string
-        image_hash:
-          type: string
-        image_url:
-          type: string
-          format: uri
-        message:
-          type: string
-        title:
-          type: string
-        link_description:
-          type: string
-        call_to_action:
-          $ref: "#/components/schemas/CallToAction"
-    ObjectStorySpec:
-      type: object
-      additionalProperties: false
-      required: [page_id]
-      properties:
-        page_id:
-          type: string
-        instagram_user_id:
-          type: string
-        link_data:
-          $ref: "#/components/schemas/LinkData"
-        video_data:
-          $ref: "#/components/schemas/VideoData"
-      description: |
-        Use `link_data` for a single image/link or carousel. Use `video_data`
-        for video. Flexible creative additionally supplies `asset_feed_spec`.
-    AssetFeedImage:
-      type: object
-      additionalProperties: false
-      properties:
-        hash:
-          type: string
-        url:
-          type: string
-          format: uri
-        url_tags:
-          type: string
-        image_crops:
-          type: object
-          additionalProperties: true
-        adlabels:
-          type: array
-          items:
-            $ref: "#/components/schemas/ObjectRef"
-    AssetFeedVideo:
-      type: object
-      additionalProperties: false
-      required: [video_id]
-      properties:
-        video_id:
-          type: string
-        thumbnail_url:
-          type: string
-          format: uri
-        thumbnail_hash:
-          type: string
-        caption_ids:
-          type: array
-          items:
-            type: string
-        url_tags:
-          type: string
-        adlabels:
-          type: array
-          items:
-            $ref: "#/components/schemas/ObjectRef"
-    AssetFeedText:
-      type: object
-      additionalProperties: false
-      required: [text]
-      properties:
-        text:
-          type: string
-        url_tags:
-          type: string
-        adlabels:
-          type: array
-          items:
-            $ref: "#/components/schemas/ObjectRef"
-    AssetFeedLinkURL:
-      type: object
-      additionalProperties: false
-      required: [website_url]
-      properties:
-        website_url:
-          type: string
-          format: uri
-        display_url:
-          type: string
-        deeplink_url:
-          type: string
-        android_url:
-          type: string
-        ios_url:
-          type: string
-        object_store_urls:
-          type: array
-          items:
-            type: string
-        carousel_see_more_url:
-          type: string
-          format: uri
-        url_tags:
-          type: string
-        adlabels:
-          type: array
-          items:
-            $ref: "#/components/schemas/ObjectRef"
-    AssetFeedSpec:
-      type: object
-      additionalProperties: false
-      properties:
-        images:
-          type: array
-          items:
-            $ref: "#/components/schemas/AssetFeedImage"
-        videos:
-          type: array
-          items:
-            $ref: "#/components/schemas/AssetFeedVideo"
-        bodies:
-          type: array
-          items:
-            $ref: "#/components/schemas/AssetFeedText"
-        titles:
-          type: array
-          items:
-            $ref: "#/components/schemas/AssetFeedText"
-        descriptions:
-          type: array
-          items:
-            $ref: "#/components/schemas/AssetFeedText"
-        link_urls:
-          type: array
-          items:
-            $ref: "#/components/schemas/AssetFeedLinkURL"
-        call_to_action_types:
-          type: array
-          items:
-            type: string
-        ad_formats:
-          type: array
-          items:
-            type: string
-        asset_customization_rules:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        optimization_type:
-          type: string
-        groups:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        additional_data:
-          type: object
-          additionalProperties: true
-        call_ads_configuration:
-          type: object
-          additionalProperties: true
-        raw:
-          $ref: "#/components/schemas/RawFields"
-    CreativeSpec:
-      type: object
-      additionalProperties: false
-      required: [name]
-      properties:
-        name:
-          type: string
-          minLength: 1
-        object_story_id:
-          type: string
-          description: Existing Facebook post ID; mutually exclusive with generated story/feed fields.
-        source_instagram_media_id:
-          type: string
-          description: Existing Instagram media ID.
-        object_story_spec:
-          $ref: "#/components/schemas/ObjectStorySpec"
-        asset_feed_spec:
-          $ref: "#/components/schemas/AssetFeedSpec"
-        url_tags:
-          type: string
-        platform_customizations:
-          type: object
-          additionalProperties: true
-        degrees_of_freedom_spec:
-          type: object
-          additionalProperties: true
-        authorization_category:
-          type: string
-        applink_treatment:
-          type: string
-        raw:
-          $ref: "#/components/schemas/RawFields"
-      description: |
-        Exactly one source shape is expected: existing `object_story_id`/
-        `source_instagram_media_id`, or `object_story_spec`. Add
-        `asset_feed_spec` to the generated story for flexible creative.
-    AdSpec:
-      type: object
-      additionalProperties: false
-      required: [name]
-      properties:
-        name:
-          type: string
-          minLength: 1
-        tracking_specs:
-          type: array
-          items:
-            type: object
-            additionalProperties: true
-        conversion_domain:
-          type: string
-        bid_amount:
-          type: integer
-          format: int64
-          minimum: 0
-        display_sequence:
-          type: integer
-          minimum: 0
-        engagement_audience:
-          type: boolean
-        raw:
-          $ref: "#/components/schemas/RawFields"
-    BatchStatus:
-      type: string
-      enum:
-        - draft
-        - queued
-        - running
-        - partially_succeeded
-        - succeeded
-        - failed
-        - cancelled
-    Batch:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - connection_id
-        - name
-        - status
-        - idempotency_key
-        - specification
-        - total_accounts
-        - succeeded_accounts
-        - failed_accounts
-        - created_by
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        connection_id:
-          type: string
-          format: uuid
-        name:
-          type: string
-        status:
-          $ref: "#/components/schemas/BatchStatus"
-        idempotency_key:
-          type: string
-        specification:
-          type: object
-          additionalProperties: true
-          description: Persisted normalized batch request.
-        total_accounts:
-          type: integer
-          minimum: 0
-        succeeded_accounts:
-          type: integer
-          minimum: 0
-        failed_accounts:
-          type: integer
-          minimum: 0
-        started_at:
-          type: [string, "null"]
-          format: date-time
-        completed_at:
-          type: [string, "null"]
-          format: date-time
-        created_by:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    BatchPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Batch"
-    BatchAccountStatus:
-      type: string
-      enum: [pending, running, succeeded, failed, skipped]
-    BatchAccountResult:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - batch_id
-        - ad_account_id
-        - status
-        - attempts
-        - request
-        - response
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        batch_id:
-          type: string
-          format: uuid
-        ad_account_id:
-          type: string
-          format: uuid
-        status:
-          $ref: "#/components/schemas/BatchAccountStatus"
-        attempts:
-          type: integer
-          minimum: 0
-        request:
-          type: object
-          additionalProperties: true
-        response:
-          type: object
-          additionalProperties: true
-        error_code:
-          type: string
-        error_subcode:
-          type: string
-        error_message:
-          type: string
-        started_at:
-          type: [string, "null"]
-          format: date-time
-        completed_at:
-          type: [string, "null"]
-          format: date-time
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    BatchAccountResultPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/BatchAccountResult"
-    PublishedObjectType:
-      type: string
-      enum: [campaign, ad_set, creative, ad]
-    PublishedObject:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - batch_id
-        - batch_account_result_id
-        - connection_id
-        - ad_account_id
-        - object_type
-        - meta_object_id
-        - parent_meta_object_id
-        - name
-        - desired_status
-        - effective_status
-        - idempotency_key
-        - request
-        - response
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        batch_id:
-          type: string
-          format: uuid
-        batch_account_result_id:
-          type: string
-          format: uuid
-        connection_id:
-          type: string
-          format: uuid
-        ad_account_id:
-          type: string
-          format: uuid
-        object_type:
-          $ref: "#/components/schemas/PublishedObjectType"
-        meta_object_id:
-          type: string
-        parent_meta_object_id:
-          type: string
-        name:
-          type: string
-        desired_status:
-          type: string
-        effective_status:
-          type: string
-        idempotency_key:
-          type: string
-        request:
-          type: object
-          additionalProperties: true
-        response:
-          type: object
-          additionalProperties: true
-        last_synced_at:
-          type: [string, "null"]
-          format: date-time
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    PublishedObjectPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/PublishedObject"
-    InsightLevel:
-      type: string
-      enum: [account, campaign, adset, ad]
-    RuleStatus:
-      type: string
-      enum: [active, disabled, archived]
-    RuleAction:
-      type: string
-      enum: [pause]
-    RuleOperator:
-      type: string
-      enum: [gt, gte, lt, lte, eq, neq]
-    RuleLogic:
-      type: string
-      enum: [all, any]
-    SampleGuard:
-      type: object
-      additionalProperties: false
-      required: [metric, minimum]
-      properties:
-        metric:
-          $ref: "#/components/schemas/MetricName"
-        minimum:
-          type: number
-          minimum: 0
-        missing_as_zero:
-          type: boolean
-          default: false
-    RuleCondition:
-      type: object
-      additionalProperties: false
-      required: [metric, operator, threshold]
-      properties:
-        metric:
-          $ref: "#/components/schemas/MetricName"
-        operator:
-          $ref: "#/components/schemas/RuleOperator"
-        threshold:
-          type: number
-        missing_as_zero:
-          type: boolean
-          default: false
-          description: Use only when an absent metric semantically means zero.
-        minimum_samples:
-          type: array
-          items:
-            $ref: "#/components/schemas/SampleGuard"
-    RuleGroup:
-      type: object
-      additionalProperties: false
-      required: [logic]
-      properties:
-        logic:
-          $ref: "#/components/schemas/RuleLogic"
-        conditions:
-          type: array
-          items:
-            $ref: "#/components/schemas/RuleCondition"
-        groups:
-          type: array
-          items:
-            $ref: "#/components/schemas/RuleGroup"
-        minimum_samples:
-          type: array
-          items:
-            $ref: "#/components/schemas/SampleGuard"
-      description: Must contain at least one condition or child group.
-    MetricName:
-      type: string
-      pattern: "^[A-Za-z0-9][A-Za-z0-9_-]*(\\.[A-Za-z0-9][A-Za-z0-9_-]*)*$"
-      examples:
-        - spend
-        - ctr
-        - actions.complete_registration
-        - cost_per_action_type.purchase
-    RuleConfiguration:
-      type: object
-      required:
-        - connection_id
-        - name
-        - scope_level
-        - conditions
-        - lookback_seconds
-      properties:
-        connection_id:
-          type: string
-          format: uuid
-        ad_account_id:
-          type: [string, "null"]
-          format: uuid
-          description: Optional account scope.
-        batch_id:
-          type: [string, "null"]
-          format: uuid
-          description: Optional scope limited to objects published by one batch.
-        name:
-          type: string
-          minLength: 1
-        scope_level:
-          type: string
-          enum: [campaign, adset, ad]
-        action:
-          allOf:
-            - $ref: "#/components/schemas/RuleAction"
-          default: pause
-        conditions:
-          $ref: "#/components/schemas/RuleGroup"
-        lookback_seconds:
-          type: integer
-          format: int64
-          minimum: 1
-          description: Rolling evaluation window in seconds.
-        evaluation_interval_seconds:
-          type: integer
-          format: int64
-          minimum: 60
-          default: 900
-        grace_period_seconds:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 0
-          description: Delay measured from the local published object's `created_at`.
-        cooldown_seconds:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 0
-        minimum_spend:
-          type: number
-          minimum: 0
-          default: 0
-          description: Account-currency units, not minor-unit integer.
-        minimum_impressions:
-          type: integer
-          format: int64
-          minimum: 0
-          default: 0
-        timezone:
-          type: string
-          examples: [Asia/Dubai]
-        metadata:
-          type: object
-          additionalProperties: true
-    CreateRuleRequest:
-      allOf:
-        - $ref: "#/components/schemas/RuleConfiguration"
-        - type: object
-          properties:
-            status:
-              type: string
-              enum: [active, disabled]
-              default: active
-      unevaluatedProperties: false
-      description: New rules may be created disabled and enabled after review.
-    UpdateRuleRequest:
-      type: object
-      additionalProperties: false
-      minProperties: 1
-      properties:
-        ad_account_id:
-          type: [string, "null"]
-          format: uuid
-        batch_id:
-          type: [string, "null"]
-          format: uuid
-        name:
-          type: string
-          minLength: 1
-        status:
-          type: string
-          enum: [active, disabled]
-        scope_level:
-          type: string
-          enum: [campaign, adset, ad]
-        action:
-          $ref: "#/components/schemas/RuleAction"
-        conditions:
-          $ref: "#/components/schemas/RuleGroup"
-        lookback_seconds:
-          type: integer
-          format: int64
-          minimum: 1
-        evaluation_interval_seconds:
-          type: integer
-          format: int64
-          minimum: 60
-        grace_period_seconds:
-          type: integer
-          format: int64
-          minimum: 0
-        cooldown_seconds:
-          type: integer
-          format: int64
-          minimum: 0
-        minimum_spend:
-          type: number
-          minimum: 0
-        minimum_impressions:
-          type: integer
-          format: int64
-          minimum: 0
-        timezone:
-          type: string
-          minLength: 1
-        metadata:
-          type: object
-          additionalProperties: true
-    AutomationRule:
-      allOf:
-        - $ref: "#/components/schemas/RuleConfiguration"
-        - type: object
-          required:
-            - id
-            - status
-            - next_evaluation_at
-            - created_at
-            - updated_at
-          properties:
-            id:
-              type: string
-              format: uuid
-            status:
-              $ref: "#/components/schemas/RuleStatus"
-            next_evaluation_at:
-              type: string
-              format: date-time
-            last_evaluated_at:
-              type: [string, "null"]
-              format: date-time
-            last_triggered_at:
-              type: [string, "null"]
-              format: date-time
-            created_at:
-              type: string
-              format: date-time
-            updated_at:
-              type: string
-              format: date-time
-      unevaluatedProperties: false
-    AutomationRulePage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/AutomationRule"
-    RuleEvaluationStatus:
-      type: string
-      enum:
-        - no_match
-        - matched
-        - action_succeeded
-        - action_failed
-        - skipped
-        - error
-    RuleEvaluation:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - rule_id
-        - meta_object_id
-        - status
-        - window_start
-        - window_end
-        - observed_metrics
-        - condition_results
-        - action_attempted
-        - action_response
-        - evaluated_at
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        rule_id:
-          type: string
-          format: uuid
-        published_object_id:
-          type: [string, "null"]
-          format: uuid
-        meta_object_id:
-          type: string
-        status:
-          $ref: "#/components/schemas/RuleEvaluationStatus"
-        window_start:
-          type: string
-          format: date-time
-        window_end:
-          type: string
-          format: date-time
-        observed_metrics:
-          type: object
-          additionalProperties:
-            type: number
-        condition_results:
-          $ref: "#/components/schemas/RuleEvaluationResult"
-        action_attempted:
-          type: boolean
-        action_response:
-          type: object
-          additionalProperties: true
-        error:
-          type: string
-        evaluated_at:
-          type: string
-          format: date-time
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    RuleEvaluationResult:
-      type: object
-      additionalProperties: false
-      required: [matched, reasons]
-      properties:
-        matched:
-          type: boolean
-        reasons:
-          type: array
-          items:
-            type: string
-        observations:
-          type: array
-          items:
-            $ref: "#/components/schemas/RuleObservation"
-    RuleObservation:
-      type: object
-      additionalProperties: false
-      required:
-        - path
-        - kind
-        - metric
-        - value
-        - found
-        - operator
-        - threshold
-        - matched
-        - explanation
-      properties:
-        path:
-          type: string
-        kind:
-          type: string
-          enum: [condition, minimum_sample]
-        metric:
-          $ref: "#/components/schemas/MetricName"
-        value:
-          type: number
-        found:
-          type: boolean
-        defaulted:
-          type: boolean
-        operator:
-          $ref: "#/components/schemas/RuleOperator"
-        threshold:
-          type: number
-        matched:
-          type: boolean
-        explanation:
-          type: string
-    RuleEvaluationPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/RuleEvaluation"
-    InsightSnapshot:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - connection_id
-        - ad_account_id
-        - meta_object_id
-        - level
-        - date_start
-        - date_stop
-        - window_start
-        - window_end
-        - account_timezone
-        - attribution_setting
-        - query_hash
-        - impressions
-        - reach
-        - clicks
-        - link_clicks
-        - landing_page_views
-        - actions
-        - conversions
-        - leads
-        - registrations
-        - purchases
-        - spend
-        - frequency
-        - ctr
-        - cpc
-        - cpm
-        - cost_per_action
-        - purchase_value
-        - roas
-        - breakdowns
-        - metrics
-        - raw
-        - fetched_at
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        connection_id:
-          type: string
-          format: uuid
-        ad_account_id:
-          type: string
-          format: uuid
-        published_object_id:
-          type: [string, "null"]
-          format: uuid
-        meta_object_id:
-          type: string
-        level:
-          $ref: "#/components/schemas/InsightLevel"
-        date_start:
-          type: string
-          format: date-time
-        date_stop:
-          type: string
-          format: date-time
-        window_start:
-          type: string
-          format: date-time
-        window_end:
-          type: string
-          format: date-time
-        account_timezone:
-          type: string
-        attribution_setting:
-          type: string
-        query_hash:
-          type: string
-        impressions:
-          type: integer
-          format: int64
-        reach:
-          type: integer
-          format: int64
-        clicks:
-          type: integer
-          format: int64
-        link_clicks:
-          type: integer
-          format: int64
-        landing_page_views:
-          type: number
-        actions:
-          type: number
-        conversions:
-          type: number
-        leads:
-          type: number
-        registrations:
-          type: number
-        purchases:
-          type: number
-        spend:
-          type: number
-        frequency:
-          type: number
-        ctr:
-          type: number
-        cpc:
-          type: number
-        cpm:
-          type: number
-        cost_per_action:
-          type: number
-        purchase_value:
-          type: number
-        roas:
-          type: number
-        breakdowns:
-          type: object
-          additionalProperties: true
-        metrics:
-          type: object
-          additionalProperties: true
-          description: Includes flattened dotted action/value metrics.
-        raw:
-          type: object
-          additionalProperties: true
-        fetched_at:
-          type: string
-          format: date-time
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    InsightSnapshotPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/InsightSnapshot"
-    JobStatus:
-      type: string
-      enum: [pending, running, succeeded, dead, cancelled]
-    Job:
-      type: object
-      additionalProperties: false
-      required:
-        - id
-        - type
-        - status
-        - priority
-        - payload
-        - attempts
-        - max_attempts
-        - available_at
-        - created_at
-        - updated_at
-      properties:
-        id:
-          type: string
-          format: uuid
-        connection_id:
-          type: [string, "null"]
-          format: uuid
-        type:
-          type: string
-        status:
-          $ref: "#/components/schemas/JobStatus"
-        priority:
-          type: integer
-        payload:
-          type: object
-          additionalProperties: true
-        dedupe_key:
-          type: [string, "null"]
-        attempts:
-          type: integer
-          minimum: 0
-        max_attempts:
-          type: integer
-          minimum: 1
-        available_at:
-          type: string
-          format: date-time
-        locked_by:
-          type: string
-        locked_at:
-          type: [string, "null"]
-          format: date-time
-        locked_until:
-          type: [string, "null"]
-          format: date-time
-        last_error:
-          type: string
-        finished_at:
-          type: [string, "null"]
-          format: date-time
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-    JobPage:
-      allOf:
-        - $ref: "#/components/schemas/PageEnvelope"
-        - type: object
-          required: [items]
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Job"
+        campaigns: { type: integer }
+        live: { type: integer }
+        paused: { type: integer }
+        spend: { type: number }
+        clicks: { type: integer }
+        impressions: { type: integer }
+        tracker_clicks: { type: integer }
+        tracker_leads: { type: number }
+        tracker_sales: { type: number }
+        tracker_revenue: { type: number }

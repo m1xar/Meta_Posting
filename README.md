@@ -1,71 +1,72 @@
 # Raze Posting
 
-Multi-tenant service for connecting Meta users, discovering their
-advertising inventory, publishing the same campaign hierarchy to many ad
-accounts, collecting Insights, and pausing underperforming objects with
-automation rules.
+Multi-tenant service for connecting Meta users, publishing the same campaign
+hierarchy to many ad accounts, collecting lifetime Insights, merging
+per-campaign registration/deposit statistics from a Keitaro tracker, and
+pausing underperforming campaigns with spend-checkpoint guards.
 
-Operators create an account with a login and password and use the browser
+Operators create an account with a login and password and work in the browser
 workspace at `/app`. Every Meta connection and all resources below it are
-isolated by the owning user. The administrator bearer API remains available
-for operations and compatibility. Meta users are connected through official
-Facebook Login for Business; Meta access tokens are never returned by this API
+isolated by the owning user. Meta users are connected through official
+Facebook Login for Business; Meta access tokens are never returned by the API
 and are encrypted at rest.
 
 ## Scope
 
-The service covers:
-
-- official Meta OAuth and multiple Meta user connections;
+- official Meta OAuth and multiple Meta user connections per operator;
 - discovery of businesses, ad accounts, Pages, Instagram accounts,
   pixels/datasets, custom conversions, audiences, and Meta apps;
-- the six ODAX objectives:
-  `OUTCOME_APP_PROMOTION`, `OUTCOME_AWARENESS`, `OUTCOME_ENGAGEMENT`,
-  `OUTCOME_LEADS`, `OUTCOME_SALES`, and `OUTCOME_TRAFFIC`;
-- website and mobile-app destinations;
-- single-image, video, carousel, flexible, and caller-supplied existing-post
-  creatives;
-- complete `Campaign → Ad Set → Creative → Ad` publishing;
-- per-account overrides, account-currency budgets, partial batch success, and
-  idempotent batch submission;
-- `ONLINE_GAMBLING_AND_GAMING` special-ad-category payloads;
-- indefinitely stored Insights and pause-only automation rules.
+- the six ODAX objectives and website/mobile-app destinations;
+- single-image, video, carousel, flexible, and existing-post creatives;
+- complete `Campaign → Ad Set → Creative → Ad` publishing with per-account
+  overrides, account-currency budgets, partial batch success, and idempotent
+  batch submission;
+- lifetime Insights snapshots per published object;
+- Keitaro tracker integration: per-campaign clicks, registrations (leads),
+  deposits (sales), and revenue matched by `sub_id_7` (campaign id) with a
+  `sub_id_3` (campaign name) fallback;
+- guard automation: a ladder of spend checkpoints per batch or campaign — when
+  lifetime spend crosses a checkpoint, minimum clicks/impressions/tracker
+  metrics are verified and the campaign is paused if they are not met.
 
-Instant Forms/lead retrieval, click-to-message destinations, and catalogs are
-intentionally out of scope for this version.
+Facebook's native automated rules are not used; all automation runs inside the
+worker. Instant Forms, click-to-message destinations, and catalogs are out of
+scope.
 
-There is no automatic Insights-retention cutoff in this release; records remain
-until an operator explicitly removes them.
+## The four workspace pages
+
+| Page | Purpose |
+|---|---|
+| `/app` | Dashboard: aggregate spend/revenue/regs/deposits, live campaigns, connection management |
+| `/app/launch` | Launcher: publish one hierarchy to many accounts with a checkpoint ladder |
+| `/app/campaigns` | All campaigns with statuses, metrics, guard progress; pause/resume and live rule editing |
+| `/app/accounts/{id}` | One ad account: aggregate totals and its campaigns |
 
 ## Stack and layout
 
-- Go 1.26, Fiber, GORM
-- PostgreSQL 18
-- one API process and one database-backed worker process with a bounded
-  concurrent runner pool
-- Goose SQL migrations
-- local persistent upload directory
-
-Important paths:
+- Go 1.26, Fiber, GORM; PostgreSQL 18
+- one API process and one database-backed worker with a bounded runner pool
+- Goose SQL migrations; local persistent upload directory
 
 | Path | Purpose |
 |---|---|
-| `cmd/api` | HTTP API entrypoint |
-| `cmd/worker` | asynchronous job worker |
+| `cmd/api` | HTTP API + workspace UI entrypoint |
+| `cmd/worker` | job runner and scheduler (sync, publish, insights, guards, tracker) |
 | `internal/domain` | persisted domain model |
-| `internal/meta` | Graph API, OAuth, discovery, and publisher |
-| `internal/rules` | rule validation and evaluation |
+| `internal/meta` | Graph API, OAuth, discovery, publisher |
+| `internal/keitaro` | Keitaro Admin API report client |
+| `internal/application` | use cases: batches, insights, guards, tracker sync |
+| `internal/httpapi` | HTTP handlers and the embedded workspace UI (`webui/`) |
 | `migrations` | PostgreSQL migrations |
 | `openapi/openapi.yaml` | OpenAPI 3.1 contract |
-| `docs/api-guide.md` | end-to-end API examples |
-| `docs/rule-dsl.md` | rule DSL and metric names |
-| `docs/operations.md` | configuration and deployment notes |
+| `docs/` | API guide, guard behavior, operations notes |
 
 ## Local start
 
 1. Copy `.env.example` to `.env`.
-2. Replace every placeholder and set the Meta app values.
-3. Start the API, worker, and PostgreSQL:
+2. Replace every placeholder; set the Meta app values and (optionally) the
+   Keitaro base URL + API key. Leaving Keitaro empty disables tracker syncing.
+3. Start everything:
 
 ```bash
 docker compose up -d --build
@@ -74,8 +75,7 @@ curl --fail http://127.0.0.1:8080/readyz
 ```
 
 Do not commit `.env`. Generate independent random values for the database
-password, internal API token, and token-encryption key. One way to generate the
-32-byte encryption key in base64 form is:
+password and the 32-byte token-encryption key:
 
 ```bash
 openssl rand -base64 32
@@ -90,52 +90,35 @@ go vet ./...
 
 ## Authentication
 
-The browser workspace uses a server-side, HttpOnly session cookie and a
-per-session CSRF token. Registration is available at `GET /register`, sign-in
-at `GET /login`, and the authenticated workspace at `GET /app`.
+The browser workspace uses a server-side, HttpOnly session cookie plus a
+per-session CSRF token (`raze_csrf` cookie echoed in the `X-CSRF-Token` header
+on mutating requests). Registration is at `GET /register`, sign-in at
+`GET /login`.
 
-Every `/v1` endpoint requires:
-
-```http
-Authorization: Bearer <INTERNAL_API_TOKEN>
-```
-
-`GET /healthz`, `GET /readyz`, `GET /docs`, `GET /swagger`,
-`GET /openapi.yaml`, and
-`GET /oauth/facebook/callback` are public. The callback is public because Meta
-redirects the user's browser to it, but it is protected by the short-lived,
-one-time OAuth `state` created by `POST /v1/oauth/sessions`.
-
-Example:
-
-```bash
-export BASE_URL=http://127.0.0.1:8080
-export ADMIN_TOKEN='set-locally-do-not-commit'
-
-curl --fail-with-body \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  "$BASE_URL/v1/connections"
-```
+`GET /healthz`, `GET /readyz`, `GET /docs`, `GET /openapi.yaml`, the legal
+pages, and `GET /oauth/facebook/callback` are public. The callback is public
+because Meta redirects the user's browser to it, but it is protected by the
+short-lived, one-time OAuth state bound to the initiating user.
 
 ## Asynchronous behavior
 
 Connection synchronization and batch publishing use the PostgreSQL-backed job
-queue. An accepted response means the work was persisted, not completed. Poll
-the returned job, connection, batch, or per-account results until it reaches a
-terminal status. Local media is uploaded to each Meta account as part of its
-batch job.
+queue. An accepted response means the work was persisted, not completed. A
+batch is deliberately not all-or-nothing: every selected ad account has its
+own result, and successful accounts remain published when another fails.
+During publishing, objects are created paused and activated bottom-up after
+the full hierarchy exists; set `leave_paused: true` for a non-spending launch.
 
-A batch is deliberately not all-or-nothing. Every selected ad account has its
-own result. Successful accounts remain published when another account fails,
-and the error payload is retained for inspection and retry planning.
+The worker also runs three recurring loops:
 
-During publishing, objects are created paused and then activated bottom-up only
-after the complete hierarchy for that account exists. Set `leave_paused: true`
-when a caller explicitly wants a non-spending launch.
+- **Insights** (`INSIGHTS_POLL_INTERVAL`): lifetime metrics per published object;
+- **Guards** (`GUARD_EVALUATION_INTERVAL`): checkpoint evaluation and pausing;
+- **Tracker** (`KEITARO_POLL_INTERVAL`): Keitaro report sync when configured.
 
 ## Documentation
 
-Start with [docs/api-guide.md](docs/api-guide.md). The machine-readable contract
-is [openapi/openapi.yaml](openapi/openapi.yaml), and rule behavior is described
-in [docs/rule-dsl.md](docs/rule-dsl.md). A running API also serves interactive
-Swagger UI at `GET /docs` (with `GET /swagger` as an alias).
+Start with [docs/api-guide.md](docs/api-guide.md). Guard behavior is described
+in [docs/guards.md](docs/guards.md), configuration and deployment in
+[docs/operations.md](docs/operations.md). The machine-readable contract is
+[openapi/openapi.yaml](openapi/openapi.yaml); a running API serves Swagger UI
+at `GET /docs`.
