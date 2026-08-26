@@ -173,7 +173,7 @@ func (r *InventoryRepository) ListAdAccounts(ctx context.Context, filter AdAccou
 	// The raw Graph payload dwarfs every other column - hundreds of accounts
 	// times a few KB each is megabytes the list consumers never look at.
 	// Callers that need it (permission checks) fetch one account by ID.
-	if err := applyPage(query.Omit("raw_json").Order("name ASC, id ASC"), page.Limit, page.Offset).Find(&items).Error; err != nil {
+	if err := applyPage(query.Omit("raw_json", "capabilities").Order("name ASC, id ASC"), page.Limit, page.Offset).Find(&items).Error; err != nil {
 		return domain.Page[domain.AdAccount]{}, err
 	}
 	return domain.Page[domain.AdAccount]{Items: items, Total: total, Limit: page.Limit, Offset: page.Offset}, nil
