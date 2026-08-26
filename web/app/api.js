@@ -91,6 +91,7 @@ export const api = {
   adAccounts: (params) => request('GET', `/v1/ad-accounts${query(params)}`),
   assets: (params) => request('GET', `/v1/assets${query(params)}`),
   pagePosts: (assetId, params) => request('GET', `/v1/assets/${assetId}/posts${query(params)}`),
+  promotablePages: (accountId) => request('GET', `/v1/ad-accounts/${accountId}/promotable-pages`),
 
   // analytics
   dailyInsights: (params) => request('GET', `/v1/insights/daily${query(params)}`),

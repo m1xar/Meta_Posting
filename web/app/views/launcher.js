@@ -286,37 +286,40 @@ export async function launcherView() {
   };
 
   const loadPages = async () => {
-    const connectionIds = selectedConnectionIds();
-    if (!connectionIds.length) {
+    const selectedAccounts = [...state.selected];
+    if (!selectedAccounts.length) {
       postPageSelect.replaceChildren(el('option', { value: '' }, 'Сначала выбери аккаунт в шаге 1'));
       postNote.textContent = 'Выбери кабинеты выше, чтобы увидеть их страницы.';
       return;
     }
-    const key = connectionIds.slice().sort().join(',');
+    const key = selectedAccounts.slice().sort().join(',');
     if (loadedPagesKey === key) return;
-    postNote.textContent = 'Загружаю страницы…';
+    postNote.textContent = 'Проверяю доступные страницы…';
     try {
-      const lists = await Promise.all(connectionIds.map((cid) =>
-        api.assets({ connection_id: cid, types: 'page', limit: 200 }).then((r) => r.items || [])));
-      // Intersect by meta_asset_id so only pages available to all selected
-      // connections remain; carry the first connection's asset id to load posts.
+      // A page is offered only if EVERY selected account may run ads for it
+      // (Meta /promote_pages) AND we have its post inventory. That is exactly
+      // what makes an existing post publishable in the whole batch; anything
+      // else would fail at ad creation like a mismatched ad set.
+      const lists = await Promise.all(selectedAccounts.map((accountId) =>
+        api.promotablePages(accountId).then((r) => r.items || [])));
       const counts = new Map();
       const byMeta = new Map();
       lists.forEach((pages) => {
         const seen = new Set();
         pages.forEach((pg) => {
-          if (seen.has(pg.meta_asset_id)) return;
-          seen.add(pg.meta_asset_id);
-          counts.set(pg.meta_asset_id, (counts.get(pg.meta_asset_id) || 0) + 1);
-          if (!byMeta.has(pg.meta_asset_id)) byMeta.set(pg.meta_asset_id, pg);
+          if (seen.has(pg.meta_id)) return;
+          seen.add(pg.meta_id);
+          counts.set(pg.meta_id, (counts.get(pg.meta_id) || 0) + 1);
+          if (!byMeta.has(pg.meta_id) && pg.asset_id) byMeta.set(pg.meta_id, pg);
         });
       });
-      const shared = [...byMeta.values()].filter((pg) => counts.get(pg.meta_asset_id) === connectionIds.length);
+      // Available to all accounts, and we can load its posts (asset_id present).
+      const shared = [...byMeta.values()].filter((pg) => counts.get(pg.meta_id) === selectedAccounts.length);
       postPageSelect.replaceChildren(
-        el('option', { value: '' }, shared.length ? 'Выбери страницу' : 'Нет страниц, доступных всем выбранным кабинетам'),
-        ...shared.map((pg) => el('option', { value: pg.id }, pg.name || pg.meta_asset_id)));
+        el('option', { value: '' }, shared.length ? 'Выбери страницу' : 'Нет страниц, доступных для рекламы во всех выбранных кабинетах'),
+        ...shared.map((pg) => el('option', { value: pg.asset_id }, pg.name || pg.meta_id)));
       loadedPagesKey = key;
-      postNote.textContent = shared.length ? `${shared.length} страниц(ы)` : '';
+      postNote.textContent = shared.length ? `${shared.length} доступных страниц(ы)` : '';
     } catch (error) { postNote.textContent = error.message; }
   };
 

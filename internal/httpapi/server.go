@@ -192,6 +192,7 @@ func (s *Server) routes() {
 	v1.Get("/launch/accounts", s.listLaunchAccounts)
 	v1.Get("/launch/templates", s.listLaunchTemplates)
 	v1.Get("/launch/templates/:id", s.getLaunchTemplate)
+	v1.Get("/ad-accounts/:id/promotable-pages", s.promotablePages)
 	v1.Post("/sync/refresh", s.syncRefresh)
 	v1.Get("/sync/status", s.syncStatus)
 	v1.Post("/launch/preview", s.previewLaunch)

@@ -336,3 +336,28 @@ func (s *Server) syncRefresh(c fiber.Ctx) error {
 	}
 	return jsonOK(c, http.StatusAccepted, summary)
 }
+
+// promotablePages lists the pages one ad account may run ads for, so the
+// launcher can offer only usable pages for an existing-post creative.
+func (s *Server) promotablePages(c fiber.Ctx) error {
+	scope, err := scopeFor(c)
+	if err != nil {
+		return err
+	}
+	id, err := parseID(c.Params("id"), "id")
+	if err != nil {
+		return err
+	}
+	// Confirm the account is in scope before touching Meta.
+	var account domain.AdAccount
+	query := s.service.Repos.DB().WithContext(c.Context()).Model(&domain.AdAccount{}).
+		Where("ad_accounts.id = ?", id)
+	if err := scope.Apply(query, "ad_accounts").Select("id").First(&account).Error; err != nil {
+		return err
+	}
+	pages, err := s.service.PromotablePages(c.Context(), id)
+	if err != nil {
+		return err
+	}
+	return jsonOK(c, http.StatusOK, fiber.Map{"items": pages, "total": len(pages)})
+}
