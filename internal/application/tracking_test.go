@@ -19,24 +19,3 @@ func TestEnsureTrackingTags(t *testing.T) {
 		t.Fatalf("already-tagged url changed: %q", out)
 	}
 }
-
-func TestTrackingLinkPresent(t *testing.T) {
-	if !trackingLinkPresent("https://t.dom/?sub_id_7={{campaign.id}}", "") {
-		t.Fatal("tagged link should count")
-	}
-	if !trackingLinkPresent("https://lander", "sub_id_7={{campaign.id}}") {
-		t.Fatal("tagged url_tags should count")
-	}
-	if trackingLinkPresent("https://lander", "sub_id_5=x") {
-		t.Fatal("untagged link+tags should not count")
-	}
-}
-
-func TestCheckpointsUseTracker(t *testing.T) {
-	if checkpointsUseTracker([]GuardCheckpoint{{Spend: 5, MinClicks: 10}}) {
-		t.Fatal("fb-only checkpoint must not count as tracker")
-	}
-	if !checkpointsUseTracker([]GuardCheckpoint{{Spend: 5, MinTrackerLeads: 1}}) {
-		t.Fatal("tracker-lead checkpoint must count")
-	}
-}

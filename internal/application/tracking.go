@@ -29,27 +29,6 @@ func ensureTrackingTags(urlTags string) string {
 	return strings.Join(parts, "&")
 }
 
-// trackingLinkPresent reports whether the click will carry the campaign id to
-// the tracker: either the destination link itself is tagged, or the url_tags
-// are. Guard checkpoints that read tracker metrics require this, otherwise the
-// tracker returns zero and the guard would pause a campaign that is actually
-// fine.
-func trackingLinkPresent(link, urlTags string) bool {
-	return hasSubID(link, "sub_id_7") || hasSubID(urlTags, "sub_id_7")
-}
-
 func hasSubID(value, key string) bool {
 	return strings.Contains(strings.ToLower(value), strings.ToLower(key)+"=")
-}
-
-// checkpointsUseTracker reports whether any checkpoint enforces a Keitaro
-// minimum (leads, sales, revenue, or tracker clicks).
-func checkpointsUseTracker(checkpoints []GuardCheckpoint) bool {
-	for _, checkpoint := range checkpoints {
-		if checkpoint.MinTrackerClicks > 0 || checkpoint.MinTrackerLeads > 0 ||
-			checkpoint.MinTrackerSales > 0 || checkpoint.MinTrackerRevenue > 0 {
-			return true
-		}
-	}
-	return false
 }

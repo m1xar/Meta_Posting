@@ -430,19 +430,39 @@ export async function launcherView() {
         el('span', {}, 'Targeting and the pixel are copied from an existing ad set. Pick one in step 2.')));
       return false;
     }
-    // A tracker checkpoint with an untracked link pauses a fine campaign, so
-    // the server refuses it. Catch it here before publishing anything.
+    return true;
+  };
+
+  // The launcher always injects the campaign-id macro, so tracking data will
+  // flow *if* the click routes through Keitaro. Whether the destination link
+  // is a Keitaro tracking URL is the operator's call - so when a checkpoint
+  // depends on tracker metrics, make that dependency explicit before spend
+  // starts, with a modal the operator has to acknowledge.
+  const trackerWarning = () => {
     const usesTracker = ladder.read().some((c) =>
       c.min_tracker_clicks || c.min_tracker_leads || c.min_tracker_sales || c.min_tracker_revenue);
+    if (!usesTracker) return Promise.resolve(true);
     const linkVal = (link.value || '') + '&' + (urlTags.value || '');
-    const usingPost = !!(document.querySelector('[placeholder*="130133585881511_"]') || {}).value;
-    if (usesTracker && !usingPost && !/sub_id_7=/i.test(linkVal)) {
-      status.replaceChildren(el('div', { class: 'error' },
-        el('strong', {}, 'Трекинг-правила не сработают'),
-        el('span', {}, 'В чекпоинтах есть пороги по Keitaro (реги/депы/трекер-клики), но в ссылке нет sub_id_7={{campaign.id}}. Дай трекинг-ссылку Keitaro или убери трекер-минимумы.')));
-      return false;
-    }
-    return true;
+    const looksTracked = /sub_id_7=/i.test(linkVal) || !!objectStoryId.value.trim();
+    return new Promise((resolve) => {
+      const dialog = el('dialog', { style: 'max-width:32rem' },
+        el('h3', { style: 'margin:0 0 .6rem' }, 'Правила зависят от Keitaro'),
+        el('p', { style: 'font-size:.9rem;line-height:1.5' },
+          'В чекпоинтах есть пороги по трекеру (реги / депозиты / трекер-клики). Они сработают только если ',
+          el('strong', {}, 'ссылка объявления ведёт на трекинг-домен Keitaro'),
+          '. sub_id_7={{campaign.id}} добавляется автоматически, но если ссылка ведёт мимо трекера, реги/депы придут нулями и гвард ',
+          el('strong', {}, 'остановит кампанию'),
+          ', даже если она реально работает.'),
+        looksTracked
+          ? el('p', { class: 'pill ok', style: 'display:inline-block' }, 'Ссылка размечена sub_id_7 — похоже на трекинг-ссылку')
+          : el('p', { class: 'pill bad', style: 'display:inline-block' }, 'В ссылке нет sub_id_7 — убедись, что это трекинг-ссылка Keitaro'),
+        el('div', { style: 'display:flex;gap:.6rem;margin-top:1rem;justify-content:flex-end' },
+          el('button', { class: 'button', onclick: () => { dialog.close(); resolve(false); } }, 'Отмена'),
+          el('button', { class: 'button primary', onclick: () => { dialog.close(); resolve(true); } }, 'Ссылка на Keitaro — запустить')));
+      document.body.append(dialog);
+      dialog.addEventListener('close', () => dialog.remove());
+      dialog.showModal();
+    });
   };
 
   container.append(el('section', { class: 'card panel' },
@@ -493,6 +513,7 @@ export async function launcherView() {
         class: 'button primary',
         onclick: async (event) => {
           if (!guardSelection()) return;
+          if (!(await trackerWarning())) return;
           const rungs = ladder.read().length;
           if (!window.confirm(`Publish into ${state.selected.size} ad account(s) with ${rungs} checkpoint(s)?`)) return;
           const button = event.currentTarget;
