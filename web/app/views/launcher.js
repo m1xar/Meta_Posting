@@ -176,6 +176,7 @@ export async function launcherView() {
   state.adSetMode = 'new';
   const adSetModeNew = el('input', { type: 'radio', name: 'adset-mode', value: 'new', checked: true, style: 'width:auto' });
   const adSetModeExisting = el('input', { type: 'radio', name: 'adset-mode', value: 'existing', style: 'width:auto' });
+  const sourceLabel = el('span', {}, 'Source ad set (targeting)');
   const postPageSelect = el('select', {});
   const postSelect = el('select', { style: 'width:100%' });
   const postNote = el('div', { class: 'muted', style: 'font-size:.8rem;margin-top:.4rem' });
@@ -303,12 +304,13 @@ export async function launcherView() {
 
   const adSetExistingNote = el('p', {
     class: 'muted', style: 'font-size:.84rem;margin:.4rem 0 1rem;display:none',
-  }, 'Все настройки (бюджет, оптимизация, биллинг, таргетинг, расписание) берутся из выбранного ад-сета как есть. Выбери исходный ад-сет в блоке «Copy settings from an existing ad set» выше.');
+  }, 'Все настройки (бюджет, оптимизация, биллинг, таргетинг, расписание) берутся из выбранного ад-сета как есть. Выбери его в списке ниже.');
 
   const applyAdSetMode = () => {
     const existing = state.adSetMode === 'existing';
     adSetFieldsBlock.style.display = existing ? 'none' : '';
     adSetExistingNote.style.display = existing ? '' : 'none';
+    sourceLabel.textContent = existing ? 'Существующий ад-сет' : 'Source ad set (targeting)';
   };
   adSetModeNew.addEventListener('change', () => { state.adSetMode = 'new'; applyAdSetMode(); });
   adSetModeExisting.addEventListener('change', () => { state.adSetMode = 'existing'; applyAdSetMode(); });
@@ -399,12 +401,6 @@ export async function launcherView() {
   container.append(el('section', { class: 'card panel' },
     el('header', {}, el('span', { class: 'label' }, '2 · Campaign')),
 
-    el('div', { class: 'stack', style: 'margin-bottom:1.4rem' },
-      el('span', { class: 'label' }, 'Copy settings from an existing ad set'),
-      el('p', { style: 'font-size:.84rem' },
-        'Pick one below. Its targeting, promoted object (pixel) and attribution are copied into the new ad set. Names repeat across accounts, so each row shows the account and the last digits of the ID.'),
-      sourceSearch, sourceSelect, sourceNote),
-
     el('span', { class: 'label' }, 'New campaign'),
     el('div', { class: 'grid-2', style: 'margin:.6rem 0 1.2rem' },
       field('Campaign name', campaignName, 'The name of the campaign being created'),
@@ -418,6 +414,11 @@ export async function launcherView() {
     el('div', { class: 'mode-toggle' },
       el('label', { class: 'mode-option' }, adSetModeNew, el('span', {}, 'Новый ад-сет')),
       el('label', { class: 'mode-option' }, adSetModeExisting, el('span', {}, 'Существующий ад-сет'))),
+    el('div', { class: 'stack', style: 'margin:.2rem 0 1rem' },
+      el('span', { class: 'label' }, sourceLabel),
+      el('p', { style: 'font-size:.82rem;margin:.2rem 0 .5rem' },
+        'Из выбранного ад-сета берутся таргетинг, пиксель и атрибуция. Имена повторяются между кабинетами — в строке видны кабинет и последние цифры ID.'),
+      sourceSearch, sourceSelect, sourceNote),
     adSetExistingNote,
     adSetFieldsBlock,
 
@@ -620,6 +621,8 @@ export async function launcherView() {
     ),
   ));
 
+  applyCreativeMode();
+  applyAdSetMode();
   renderSources();
   return container;
 }
