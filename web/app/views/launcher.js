@@ -598,6 +598,23 @@ export async function launcherView() {
     return payload;
   };
 
+  // Poll a batch until it reaches a terminal state (or a bound), so the UI can
+  // report the actual publish outcome instead of the "queued" acknowledgement.
+  const pollBatch = async (batchId) => {
+    if (!batchId) return { status: 'failed', succeeded_accounts: 0, failed_accounts: 0, total_accounts: 0 };
+    const terminal = new Set(['succeeded', 'partially_succeeded', 'failed', 'cancelled']);
+    const deadline = Date.now() + 120000;
+    for (;;) {
+      let batch;
+      try { batch = await api.batch(batchId); } catch (_) { batch = null; }
+      if (batch && terminal.has(batch.status)) return batch;
+      if (Date.now() > deadline) {
+        return batch || { status: 'running', succeeded_accounts: 0, failed_accounts: 0, total_accounts: state.selected.size };
+      }
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  };
+
   const showError = (error) => {
     status.replaceChildren(el('div', { class: 'error' },
       el('strong', {}, error.code || 'Rejected'), el('span', {}, error.message)));
@@ -704,19 +721,40 @@ export async function launcherView() {
           status.replaceChildren(el('div', { class: 'card panel', style: 'display:flex;gap:.6rem;align-items:center' },
             el('span', { class: 'spinner' }), el('span', {}, 'Отправляем в Meta и ждём ответ…')));
           try {
-            // Stay on the launcher; report the real outcome here rather than
-            // redirecting before Meta has answered.
+            // Launch only queues the batch; publishing runs in the worker.
+            // Poll the batch to its terminal state so the operator sees the
+            // real publish result, not just "accepted".
             const result = await api.launch(buildPayload());
-            status.replaceChildren();
+            const batchId = result.batch && result.batch.id;
             if (result.warning) {
               status.replaceChildren(el('div', { class: 'error' },
-                el('strong', {}, 'Опубликовано, но гвард не полностью прикреплён'), el('span', {}, result.warning)));
-              toast('Опубликовано с оговоркой — проверь гвард', 'ok');
-            } else {
+                el('strong', {}, 'Гвард прикреплён не полностью'), el('span', {}, result.warning)));
+            }
+            status.replaceChildren(el('div', { class: 'card panel', style: 'display:flex;gap:.6rem;align-items:center' },
+              el('span', { class: 'spinner' }), el('span', {}, 'Публикуем в Meta…')));
+            const final = await pollBatch(batchId);
+            if (final.status === 'succeeded') {
               status.replaceChildren(el('div', { class: 'card panel', style: 'border-color:var(--ok)' },
-                el('strong', {}, `Готово — запущено в ${state.selected.size} кабинет(ов).`),
+                el('strong', {}, `Опубликовано в ${final.succeeded_accounts}/${final.total_accounts} кабинет(ов).`),
                 el('a', { class: 'button small', href: '#/campaigns', style: 'margin-left:.6rem' }, 'Открыть кампании')));
-              toast(`Запущено в ${state.selected.size} кабинет(ов)`, 'ok');
+              toast('Кампания опубликована', 'ok');
+            } else if (final.status === 'running' || final.status === 'queued') {
+              status.replaceChildren(el('div', { class: 'card panel' },
+                el('strong', {}, 'Ещё публикуется…'),
+                el('span', { style: 'display:block;margin-top:.3rem' },
+                  'Meta обрабатывает дольше обычного. Результат появится на странице кампаний.'),
+                el('a', { class: 'button small', href: '#/campaigns', style: 'margin-top:.5rem' }, 'Открыть кампании')));
+              toast('Публикация продолжается', 'ok');
+            } else {
+              const errs = await api.batchResults(batchId).catch(() => ({ items: [] }));
+              const firstErr = (errs.items || []).find((r) => r.error_message);
+              status.replaceChildren(el('div', { class: 'error' },
+                el('strong', {}, final.status === 'partially_succeeded'
+                  ? `Опубликовано частично: ${final.succeeded_accounts}/${final.total_accounts}, ${final.failed_accounts} с ошибкой`
+                  : 'Публикация не удалась'),
+                el('span', { style: 'display:block;margin-top:.3rem' },
+                  firstErr ? firstErr.error_message : 'Meta отклонила публикацию. Проверь кабинет, страницу/пост и пиксель.')));
+              toast(final.status === 'partially_succeeded' ? 'Частичный успех' : 'Публикация не удалась', 'bad');
             }
           } catch (error) {
             showError(error);
