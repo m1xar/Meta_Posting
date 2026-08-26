@@ -4,30 +4,7 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="850d3e5c-0df0-4b8e-88eb-016331640443" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.dockerignore" beforeDir="false" afterPath="$PROJECT_DIR$/.dockerignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmd/api/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/api/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/api-guide.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/api-guide.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/application/campaign_audit.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/application/campaign_audit.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/application/oauth.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/application/oauth.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/application/sync.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/application/sync.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/application/sync_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/application/sync_test.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/config/config.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/config/config.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/domain/models.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/domain/models.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/httpapi/resources.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/httpapi/resources.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/httpapi/server.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/httpapi/server.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/httpapi/server_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/httpapi/server_test.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/meta/campaign_audit.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/campaign_audit.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/meta/client.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/client.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/meta/client_test.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/client_test.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/meta/discovery.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/discovery.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/meta/oauth.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/meta/oauth.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/platform/database/meta_repository.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/platform/database/meta_repository.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/platform/database/repositories.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/platform/database/repositories.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/openapi/openapi.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/openapi/openapi.yaml" afterDir="false" />
-    </list>
+    <list default="true" id="850d3e5c-0df0-4b8e-88eb-016331640443" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />

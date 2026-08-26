@@ -49,3 +49,16 @@ func (r *TrackerRepository) ForObject(ctx context.Context, objectID uuid.UUID) (
 	}
 	return &stat, nil
 }
+
+// ListForCampaignIDs returns stats matched only by Meta campaign ID, which is
+// how discovered (non-launched) campaigns find their tracker roll-up.
+func (r *TrackerRepository) ListForCampaignIDs(ctx context.Context, metaIDs []string) ([]domain.TrackerStat, error) {
+	if len(metaIDs) == 0 {
+		return nil, nil
+	}
+	var stats []domain.TrackerStat
+	err := r.db.WithContext(ctx).
+		Where("meta_campaign_id IN ?", metaIDs).
+		Find(&stats).Error
+	return stats, err
+}

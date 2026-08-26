@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-ads/internal/domain"
 	"github.com/watchers-factory/raze-ads/internal/keitaro"
 	"github.com/watchers-factory/raze-ads/internal/meta"
@@ -37,28 +38,63 @@ func (s *Service) SyncTrackerStats(ctx context.Context) error {
 		Find(&campaigns).Error; err != nil {
 		return err
 	}
-	if len(campaigns) == 0 {
+	// Campaigns discovered from the ad accounts count too: buyers launch
+	// outside this service as well, and their tracker traffic is tagged with
+	// the same campaign name/id macros.
+	var entities []domain.AdEntity
+	if err := s.Repos.DB().WithContext(ctx).
+		Where("level = ?", domain.AdEntityCampaign).
+		Order("created_at ASC").
+		Find(&entities).Error; err != nil {
+		return err
+	}
+	if len(campaigns) == 0 && len(entities) == 0 {
 		return nil
 	}
 
-	byID := make(map[string]*domain.PublishedObject, len(campaigns))
-	byName := make(map[string]*domain.PublishedObject, len(campaigns))
-	ids := make([]string, 0, len(campaigns))
-	names := make([]string, 0, len(campaigns))
-	for index := range campaigns {
-		campaign := &campaigns[index]
-		if id := strings.TrimSpace(campaign.MetaObjectID); id != "" {
+	type trackerTarget struct {
+		ObjectID     *uuid.UUID
+		ConnectionID uuid.UUID
+		MetaID       string
+		Name         string
+	}
+	byID := make(map[string]*trackerTarget, len(campaigns)+len(entities))
+	byName := make(map[string]*trackerTarget, len(campaigns)+len(entities))
+	ids := make([]string, 0, len(campaigns)+len(entities))
+	names := make([]string, 0, len(campaigns)+len(entities))
+	addTarget := func(target *trackerTarget) {
+		if id := strings.TrimSpace(target.MetaID); id != "" {
 			if _, seen := byID[id]; !seen {
-				byID[id] = campaign
+				byID[id] = target
 				ids = append(ids, id)
 			}
 		}
-		if name := strings.TrimSpace(campaign.Name); name != "" {
+		if name := strings.TrimSpace(target.Name); name != "" {
 			if _, seen := byName[name]; !seen {
-				byName[name] = campaign
+				byName[name] = target
 				names = append(names, name)
 			}
 		}
+	}
+	// Launched campaigns first so a shared name resolves to ours.
+	for index := range campaigns {
+		campaign := &campaigns[index]
+		objectID := campaign.ID
+		addTarget(&trackerTarget{
+			ObjectID:     &objectID,
+			ConnectionID: campaign.ConnectionID,
+			MetaID:       campaign.MetaObjectID,
+			Name:         campaign.Name,
+		})
+	}
+	for index := range entities {
+		entity := &entities[index]
+		addTarget(&trackerTarget{
+			ObjectID:     entity.PublishedObjectID,
+			ConnectionID: entity.ConnectionID,
+			MetaID:       entity.MetaObjectID,
+			Name:         entity.Name,
+		})
 	}
 
 	rows, err := s.Tracker.CampaignReport(ctx, ids, names)
@@ -68,24 +104,26 @@ func (s *Service) SyncTrackerStats(ctx context.Context) error {
 	now := s.Now()
 	merged := make(map[string]*domain.TrackerStat)
 	for _, row := range rows {
-		campaign := byID[strings.TrimSpace(row.SubID7)]
-		if campaign == nil {
-			campaign = byName[strings.TrimSpace(row.SubID3)]
+		target := byID[strings.TrimSpace(row.SubID7)]
+		if target == nil {
+			target = byName[strings.TrimSpace(row.SubID3)]
 		}
-		if campaign == nil {
+		if target == nil {
 			continue
 		}
-		stat, exists := merged[campaign.ID.String()]
+		key := target.MetaID + "\x00" + target.Name
+		stat, exists := merged[key]
 		if !exists {
+			connectionID := target.ConnectionID
 			stat = &domain.TrackerStat{
-				ConnectionID:      &campaign.ConnectionID,
-				PublishedObjectID: &campaign.ID,
-				MetaCampaignID:    campaign.MetaObjectID,
-				CampaignName:      campaign.Name,
+				ConnectionID:      &connectionID,
+				PublishedObjectID: target.ObjectID,
+				MetaCampaignID:    target.MetaID,
+				CampaignName:      target.Name,
 				Raw:               domain.MustJSON(map[string]any{}),
 				LastSyncedAt:      now,
 			}
-			merged[campaign.ID.String()] = stat
+			merged[key] = stat
 		}
 		// The ID-filtered and name-filtered reports can both return the same
 		// visitors, so keep the larger roll-up instead of double counting.

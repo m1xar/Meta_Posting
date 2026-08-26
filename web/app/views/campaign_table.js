@@ -64,7 +64,10 @@ export function campaignRow(view, options = {}) {
   const cells = [
     el('td', { class: 'name' },
       el('span', {}, campaign.name || campaign.meta_object_id),
-      el('span', { class: 'sub' }, [options.accountName, campaign.meta_object_id].filter(Boolean).join(' · '))),
+      el('span', { class: 'sub' }, [
+        options.accountName, campaign.meta_object_id,
+        campaign.source === 'discovered' ? 'discovered' : null,
+      ].filter(Boolean).join(' · '))),
     el('td', {}, pill(campaign.effective_status || 'unknown',
       isLive(campaign.effective_status) ? 'ok' : isPaused(campaign.effective_status) ? 'warn' : 'info')),
     el('td', { class: 'num' }, money(spend)),

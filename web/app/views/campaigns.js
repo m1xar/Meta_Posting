@@ -60,9 +60,13 @@ export async function campaignsView() {
     return `${view.campaign.name} ${view.campaign.meta_object_id}`.toLowerCase().includes(term);
   });
 
+  // Guards only attach to campaigns launched through this service; a
+  // discovered campaign can still be paused and resumed.
   const actions = (view) => el('div', { style: 'display:flex;gap:.4rem;justify-content:flex-end' },
     campaignActions(view, refresh),
-    el('button', { class: 'button small', onclick: () => openEditor(view) }, 'Rules'),
+    view.campaign.source === 'launched'
+      ? el('button', { class: 'button small', onclick: () => openEditor(view) }, 'Rules')
+      : null,
   );
 
   const renderRows = () => {

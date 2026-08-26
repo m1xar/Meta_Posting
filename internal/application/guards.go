@@ -376,6 +376,10 @@ func (s *Service) SetCampaignStatus(ctx context.Context, campaignID uuid.UUID, p
 	if err := s.Repos.DB().WithContext(ctx).
 		Where("id = ? AND object_type = ?", campaignID, domain.PublishedCampaign).
 		First(&campaign).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Not one of ours: a campaign discovered from the ad account.
+			return s.setDiscoveredCampaignStatus(ctx, campaignID, pause)
+		}
 		return nil, err
 	}
 	_, token, err := s.accessToken(ctx, campaign.ConnectionID)
@@ -407,6 +411,59 @@ func (s *Service) SetCampaignStatus(ctx context.Context, campaignID uuid.UUID, p
 	campaign.EffectiveStatus = status
 	campaign.DesiredStatus = status
 	return &campaign, nil
+}
+
+// setDiscoveredCampaignStatus pauses or resumes a campaign that exists only
+// as discovered ad-account inventory. There are no guard checks to override:
+// guards only attach to campaigns launched through this service.
+func (s *Service) setDiscoveredCampaignStatus(ctx context.Context, entityID uuid.UUID, pause bool) (*domain.PublishedObject, error) {
+	var entity domain.AdEntity
+	if err := s.Repos.DB().WithContext(ctx).
+		Where("id = ? AND level = ?", entityID, domain.AdEntityCampaign).
+		First(&entity).Error; err != nil {
+		return nil, err
+	}
+	_, token, err := s.accessToken(ctx, entity.ConnectionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.Meta.SetEntityStatus(ctx, token, entity.MetaObjectID, metaStatusFor(pause)); err != nil {
+		return nil, err
+	}
+	status := "ACTIVE"
+	if pause {
+		status = "PAUSED"
+	}
+	now := s.Now()
+	if err := s.Repos.DB().WithContext(ctx).Model(&domain.AdEntity{}).
+		Where("id = ?", entity.ID).
+		Updates(map[string]any{
+			"effective_status":  status,
+			"configured_status": status,
+			"status":            status,
+			"updated_at":        now,
+		}).Error; err != nil {
+		return nil, err
+	}
+	s.audit(ctx, domain.AuditEvent{
+		ConnectionID: &entity.ConnectionID,
+		ActorType:    "user",
+		Action:       "meta.campaign.status_changed",
+		EntityType:   "campaign",
+		EntityID:     entity.MetaObjectID,
+		After:        domain.MustJSON(map[string]any{"status": status}),
+	})
+	result := &domain.PublishedObject{
+		ConnectionID:    entity.ConnectionID,
+		AdAccountID:     entity.AdAccountID,
+		ObjectType:      domain.PublishedCampaign,
+		MetaObjectID:    entity.MetaObjectID,
+		Name:            entity.Name,
+		DesiredStatus:   status,
+		EffectiveStatus: status,
+	}
+	result.ID = entity.ID
+	return result, nil
 }
 
 func (s *Service) overrideFailedChecks(ctx context.Context, campaignID uuid.UUID, now time.Time) error {
