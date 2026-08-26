@@ -202,7 +202,7 @@ func (f LaunchForm) composeCreative() (meta.CreativeSpec, error) {
 		return meta.CreativeSpec{
 			Name:          firstNonEmpty(f.Creative.Name, "Creative"),
 			ObjectStoryID: storyID,
-			URLTags:       f.Creative.URLTags,
+			URLTags:       ensureTrackingTags(f.Creative.URLTags),
 		}, nil
 	}
 	link := meta.LinkData{
@@ -239,7 +239,7 @@ func (f LaunchForm) composeCreative() (meta.CreativeSpec, error) {
 	return meta.CreativeSpec{
 		Name:            firstNonEmpty(f.Creative.Name, f.Creative.Headline, "Creative"),
 		ObjectStorySpec: story,
-		URLTags:         f.Creative.URLTags,
+		URLTags:         ensureTrackingTags(f.Creative.URLTags),
 	}, nil
 }
 

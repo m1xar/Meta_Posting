@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/watchers-factory/raze-ads/internal/domain"
@@ -70,6 +71,20 @@ func (s *Service) Launch(ctx context.Context, request LaunchRequest) (LaunchResu
 	if len(request.Checkpoints) > 0 {
 		if _, err := normalizeCheckpoints(request.Checkpoints); err != nil {
 			return LaunchResult{}, err
+		}
+		// A tracker checkpoint on an untracked link is worse than no guard: the
+		// tracker returns zero, the minimum is never met, and the guard pauses
+		// a campaign that is actually fine. Refuse the launch instead. The
+		// launcher auto-injects the campaign-id macro into url_tags, so this
+		// only trips when the destination link never reaches the tracker.
+		if checkpointsUseTracker(request.Checkpoints) && request.Form != nil {
+			link := strings.TrimSpace(request.Form.Creative.Link)
+			tags := ensureTrackingTags(request.Form.Creative.URLTags)
+			existingPost := strings.TrimSpace(request.Form.Creative.ObjectStoryID) != ""
+			if !existingPost && !trackingLinkPresent(link, tags) {
+				return LaunchResult{}, invalid("checkpoints",
+					"a tracker checkpoint (regs/deposits/tracker clicks) needs the campaign-id macro in the destination link; add sub_id_7={{campaign.id}} to the tracking URL or remove the tracker minimums")
+			}
 		}
 	}
 

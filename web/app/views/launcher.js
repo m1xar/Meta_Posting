@@ -321,7 +321,8 @@ export async function launcherView() {
     el('div', { class: 'grid-2', style: 'margin:.6rem 0' },
       field('Page ID', pageId, 'The Page that publishes the ad'),
       field('Instagram account ID', igActor),
-      field('Destination URL', link),
+      field('Destination URL', link,
+        'Ссылка на трекинг-домен Keitaro с sub_id_7={{campaign.id}}. Без неё правила по Keitaro (реги/депы) не сработают и остановят кампанию. Макросы sub_id_7/sub_id_3 добавляются автоматически.'),
       field('Call to action', cta),
       field('Headline', headline),
       field('Description', description),
@@ -427,6 +428,18 @@ export async function launcherView() {
       status.replaceChildren(el('div', { class: 'error' },
         el('strong', {}, 'No source ad set chosen'),
         el('span', {}, 'Targeting and the pixel are copied from an existing ad set. Pick one in step 2.')));
+      return false;
+    }
+    // A tracker checkpoint with an untracked link pauses a fine campaign, so
+    // the server refuses it. Catch it here before publishing anything.
+    const usesTracker = ladder.read().some((c) =>
+      c.min_tracker_clicks || c.min_tracker_leads || c.min_tracker_sales || c.min_tracker_revenue);
+    const linkVal = (link.value || '') + '&' + (urlTags.value || '');
+    const usingPost = !!(document.querySelector('[placeholder*="130133585881511_"]') || {}).value;
+    if (usesTracker && !usingPost && !/sub_id_7=/i.test(linkVal)) {
+      status.replaceChildren(el('div', { class: 'error' },
+        el('strong', {}, 'Трекинг-правила не сработают'),
+        el('span', {}, 'В чекпоинтах есть пороги по Keitaro (реги/депы/трекер-клики), но в ссылке нет sub_id_7={{campaign.id}}. Дай трекинг-ссылку Keitaro или убери трекер-минимумы.')));
       return false;
     }
     return true;
