@@ -80,7 +80,10 @@ export function campaignRow(view, options = {}) {
     el('td', {}, ladderChips(view)),
   ];
   if (options.actions) cells.push(el('td', { class: 'num' }, options.actions(view)));
-  return el('tr', {}, ...cells);
+  // A campaign with spend but no tracker match is flagged: its revenue is
+  // unknown, so any profit read on it is misleading until tracking is fixed.
+  const untracked = !view.tracker && (Number(insights.spend) || 0) > 0;
+  return el('tr', untracked ? { class: 'row-untracked', title: 'Нет данных Keitaro — проверь разметку ссылки (sub_id_7)' } : {}, ...cells);
 }
 
 export function campaignTable(views, options = {}) {
@@ -116,12 +119,22 @@ export function campaignActions(view, onChanged) {
 export function totalsMetrics(totals, metric) {
   const spend = Number(totals.spend) || 0;
   const revenue = Number(totals.tracker_revenue) || 0;
+  const trackedSpend = Number(totals.tracked_spend) || 0;
+  const untrackedSpend = Number(totals.untracked_spend) || 0;
+  const trackedProfit = revenue - trackedSpend;
+  const roi = trackedSpend > 0 ? `${Math.round((trackedProfit / trackedSpend) * 100)}%` : '—';
+  const coverage = totals.campaigns
+    ? `${int(totals.matched)}/${int(totals.campaigns)} с трекером`
+    : '';
   return [
-    metric('Spend', money(spend)),
-    metric('Revenue', money(revenue), 'from the tracker'),
-    metric('Profit', money(revenue - spend), null, revenue - spend < 0),
+    // Tracked half: revenue is comparable to the spend that produced it.
+    metric('Tracked spend', money(trackedSpend), coverage),
+    metric('Revenue', money(revenue), 'from Keitaro'),
+    metric('Profit (tracked)', money(trackedProfit), `ROI ${roi}`, trackedProfit < 0),
+    // Untracked half: spend with no tracker data, shown apart so it does not
+    // masquerade as a loss.
+    metric('Untracked spend', money(untrackedSpend), 'нет данных Keitaro', untrackedSpend > 0),
     metric('Live', `${int(totals.live)} / ${int(totals.campaigns)}`, `${int(totals.paused)} paused`),
-    metric('Clicks', int(totals.clicks), `${int(totals.tracker_clicks)} tracker`),
     metric('Regs', num(totals.tracker_leads)),
     metric('Deposits', num(totals.tracker_sales)),
   ];

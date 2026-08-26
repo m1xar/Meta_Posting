@@ -206,6 +206,13 @@ type campaignTotals struct {
 	TrackerLeads   float64 `json:"tracker_leads"`
 	TrackerSales   float64 `json:"tracker_sales"`
 	TrackerRevenue float64 `json:"tracker_revenue"`
+	// Tracked vs untracked split: matched campaigns have Keitaro data, so
+	// their revenue is comparable to their spend; unmatched spend has no
+	// revenue to weigh against and would otherwise drag the overall number
+	// into a misleading loss.
+	Matched        int     `json:"matched"`
+	TrackedSpend   float64 `json:"tracked_spend"`
+	UntrackedSpend float64 `json:"untracked_spend"`
 }
 
 func campaignIsLive(status string) bool {
@@ -232,11 +239,19 @@ func (totals *campaignTotals) add(view campaignView) {
 		totals.Clicks += view.Insights.Clicks
 		totals.Impressions += view.Insights.Impressions
 	}
+	spend := 0.0
+	if view.Insights != nil {
+		spend = view.Insights.Spend
+	}
 	if view.Tracker != nil {
+		totals.Matched++
+		totals.TrackedSpend += spend
 		totals.TrackerClicks += view.Tracker.Clicks
 		totals.TrackerLeads += view.Tracker.Leads
 		totals.TrackerSales += view.Tracker.Sales
 		totals.TrackerRevenue += view.Tracker.Revenue
+	} else {
+		totals.UntrackedSpend += spend
 	}
 }
 

@@ -258,3 +258,7 @@ code { font-family: var(--mono); font-size: .82em; }
   border: 2px solid rgba(255,255,255,.35); border-top-color: #fff;
   border-radius: 50%; animation: spin .6s linear infinite;
 }
+
+/* Campaigns with spend but no Keitaro match: revenue unknown, flag amber. */
+tr.row-untracked { background: rgba(255, 212, 121, .07); }
+tr.row-untracked td:first-child { box-shadow: inset 3px 0 0 var(--warn, #ffd479); }

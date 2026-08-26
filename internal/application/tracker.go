@@ -69,10 +69,13 @@ func (s *Service) SyncTrackerStats(ctx context.Context) error {
 				ids = append(ids, id)
 			}
 		}
-		if name := strings.TrimSpace(target.Name); name != "" {
-			if _, seen := byName[name]; !seen {
-				byName[name] = target
-				names = append(names, name)
+		if raw := strings.TrimSpace(target.Name); raw != "" {
+			key := normalizeCampaignName(raw)
+			if _, seen := byName[key]; !seen {
+				byName[key] = target
+				// The report is filtered by the exact stored name; the
+				// normalized key is only for our lookup side.
+				names = append(names, raw)
 			}
 		}
 	}
@@ -106,7 +109,7 @@ func (s *Service) SyncTrackerStats(ctx context.Context) error {
 	for _, row := range rows {
 		target := byID[strings.TrimSpace(row.SubID7)]
 		if target == nil {
-			target = byName[strings.TrimSpace(row.SubID3)]
+			target = byName[normalizeCampaignName(row.SubID3)]
 		}
 		if target == nil {
 			continue
@@ -147,4 +150,11 @@ func (s *Service) SyncTrackerStats(ctx context.Context) error {
 		return fmt.Errorf("store tracker stats: %w", err)
 	}
 	return nil
+}
+
+// normalizeCampaignName makes the name-fallback match tolerant of the small
+// differences that otherwise split a name in two: surrounding whitespace,
+// collapsed internal runs, and case.
+func normalizeCampaignName(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(name), " "))
 }
