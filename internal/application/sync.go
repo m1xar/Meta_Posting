@@ -256,6 +256,21 @@ func (s *Service) SyncConnection(ctx context.Context, connectionID uuid.UUID) (s
 		})
 	}
 
+	// Filling in spend is part of the initial sync, not a separate manual step:
+	// enqueue inventory and insight collection for every discovered account so
+	// the dashboard has numbers as soon as discovery completes.
+	distinctAccounts := make([]uuid.UUID, 0, len(seenAdAccountMetaIDs))
+	for _, metaID := range seenAdAccountMetaIDs {
+		if id, ok := adAccountIDs[metaID]; ok {
+			distinctAccounts = append(distinctAccounts, id)
+		}
+	}
+	if enqErr := s.enqueueInitialInsights(ctx, connectionID, distinctAccounts, now); enqErr != nil {
+		summary.Failures = append(summary.Failures, meta.DiscoveryFailure{
+			Scope: "insights", Message: enqErr.Error(),
+		})
+	}
+
 	after, _ := jsonValue(summary)
 	severity := domain.AuditInfo
 	if len(summary.Failures) > 0 {
@@ -271,6 +286,50 @@ func (s *Service) SyncConnection(ctx context.Context, connectionID uuid.UUID) (s
 		After:        after,
 	})
 	return summary, nil
+}
+
+// enqueueInitialInsights schedules inventory, recent daily insights, and a
+// history backfill for every account a fresh sync discovered, so spend appears
+// without a second manual sync.
+func (s *Service) enqueueInitialInsights(ctx context.Context, connectionID uuid.UUID, accountIDs []uuid.UUID, now time.Time) error {
+	if len(accountIDs) == 0 {
+		return nil
+	}
+	lookback := s.Config.Worker.InsightsLookbackDays
+	if lookback < 1 {
+		lookback = 7
+	}
+	since := now.UTC().AddDate(0, 0, -lookback).Format("2006-01-02")
+	until := now.UTC().Format("2006-01-02")
+	bucket := fmt.Sprintf("%d", now.UTC().Truncate(time.Hour).Unix())
+	var failures []error
+	enqueue := func(jobType, dedupe string, payload any) {
+		key := dedupe + ":" + bucket
+		id := connectionID
+		if _, _, err := s.Repos.Jobs.Enqueue(ctx, &domain.Job{
+			ConnectionID: &id,
+			Type:         jobType,
+			Status:       domain.JobPending,
+			Priority:     20,
+			Payload:      domain.MustJSON(payload),
+			DedupeKey:    &key,
+			MaxAttempts:  s.Config.Worker.MaxAttempts,
+			AvailableAt:  now.UTC(),
+		}); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	for _, accountID := range accountIDs {
+		enqueue(JobSyncAdEntities, "initsync:entities:"+accountID.String(),
+			AdEntitiesJobPayload{AdAccountID: accountID})
+		for _, level := range []domain.InsightLevel{domain.InsightAccount, domain.InsightCampaign} {
+			enqueue(JobCollectAccountInsights, "initsync:insights:"+string(level)+":"+accountID.String(),
+				AccountInsightsJobPayload{AdAccountID: accountID, Level: level, Since: since, Until: until, Reason: "initial_sync"})
+			enqueue(JobBackfillInsights, "initsync:backfill:"+string(level)+":"+accountID.String(),
+				BackfillInsightsJobPayload{AdAccountID: accountID, Level: level})
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func databaseInventoryReconciliation(
