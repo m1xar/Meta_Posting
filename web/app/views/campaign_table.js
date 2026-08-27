@@ -134,6 +134,10 @@ export function totalsMetrics(totals, metric) {
     // Untracked half: spend with no tracker data, shown apart so it does not
     // masquerade as a loss.
     metric('Untracked spend', money(untrackedSpend), 'нет данных Keitaro', untrackedSpend > 0),
+    // Worst-case P&L: revenue against ALL spend, treating untracked spend as
+    // if it earned nothing. The truth sits between this and tracked profit.
+    metric('P&L incl. untracked', money(revenue - spend),
+      untrackedSpend > 0 ? 'весь спенд, untracked как $0 выручки' : 'всё сматчено', revenue - spend < 0),
     metric('Live', `${int(totals.live)} / ${int(totals.campaigns)}`, `${int(totals.paused)} paused`),
     metric('Regs', num(totals.tracker_leads)),
     metric('Deposits', num(totals.tracker_sales)),
